@@ -5,7 +5,7 @@ from airflow.operators.python import get_current_context
 
 
 from helper import util
-from extractors.main_mini_v6 import run
+from extractors.main_mini_v7 import run
 from datetime import datetime
 
 import pandas as pd
@@ -14,7 +14,7 @@ import pandas as pd
 
 
 @task
-def extract_instagram_data(filename, debug: bool = True):
+def extract_instagram_data(brand_id,brandname, debug: bool = True):
     context = get_current_context()
 
     # Airflow에게 어느 날짜의 데이터를 읽을지 문의
@@ -24,16 +24,20 @@ def extract_instagram_data(filename, debug: bool = True):
     if debug:
         print(f"Processing data for date: {date_to_process} to {following_day}")
 
+    # 어제 날짜 데이처 추출
+    # last_day = util.get_last_day(date_to_process)
 
     posts = run(
-        tagged_url="https://www.instagram.com/amomento.co/tagged/",
+        brand_id=brand_id,
+        brand_name=brandname,
         target=60,
         headless=True,  # Airflow에서는 브라우저 안 보이게
+        target_day=date_to_process
     )
-    df = pd.DataFrame(posts, columns=["insta_id", "full_link", "img_src", "post_date"])
+    df = pd.DataFrame(posts, columns=["post_id","insta_id","brand_name", "brand_id", "full_link", "img_src", "post_date"])
     
     tmp_dir = Variable.get("data_dir", default_var="/tmp/")
-    file_path = util.get_file_path(tmp_dir,filename,get_current_context())
+    file_path = util.get_file_path(tmp_dir,brandname,get_current_context())
 
     df.to_csv(file_path, index=False, encoding='utf-8-sig')
     print(f"Data saved to {file_path}, total records: {len(df)}")
@@ -44,7 +48,7 @@ def load_to_snowflake(filename, schema, table):
     cur = util.return_snowflake_conn("snowflake_fsh_conn")
     context = get_current_context()
 
-    date_to_process = str(context['logical_date'])[:10]
+    date_to_process = str(context['logical_date'])[:10] # 2024-01-08
     tmp_dir = Variable.get("data_dir", "/tmp/")
     file_path = util.get_file_path(tmp_dir, filename, get_current_context())
 
@@ -60,7 +64,10 @@ def load_to_snowflake(filename, schema, table):
             return
         cur.execute(f"USE SCHEMA {schema};")
         cur.execute(f"""CREATE TABLE IF NOT EXISTS {table} (
+            post_id STRING,
             insta_id STRING,
+            brand_name STRING,
+            brand_id STRING,
             full_link STRING,
             img_src STRING,
             post_date DATE
@@ -70,11 +77,34 @@ def load_to_snowflake(filename, schema, table):
         cur.execute(f"DELETE FROM {table} WHERE post_date = '{date_to_process}';")
 
         for index, row in df.iterrows():
-            sql = f"""
-                INSERT INTO {table} (insta_id, full_link, img_src, post_date)
-                VALUES (%s, %s, %s, %s);
-            """
-            cur.execute(sql, (row['insta_id'], row['full_link'], row['img_src'], row['post_date']))
+            sql = sql = f"""
+                MERGE INTO {table} AS target
+                USING (
+                SELECT
+                    %s AS post_id,
+                    %s AS insta_id,
+                    %s AS brand_name,
+                    %s AS brand_id,
+                    %s AS full_link,
+                    %s AS img_src,
+                    %s AS post_date
+                ) AS source
+                ON target.post_id = source.post_id
+                WHEN MATCHED THEN UPDATE SET
+                insta_id   = source.insta_id,
+                brand_name = source.brand_name,
+                brand_id   = source.brand_id,
+                full_link  = source.full_link,
+                img_src    = source.img_src,
+                post_date  = source.post_date
+                WHEN NOT MATCHED THEN INSERT (
+                post_id, insta_id, brand_name, brand_id, full_link, img_src, post_date
+                ) VALUES (
+                source.post_id, source.insta_id, source.brand_name, source.brand_id,
+                source.full_link, source.img_src, source.post_date
+                );
+                """
+            cur.execute(sql, (row['post_id'],row['insta_id'],row['brand_name'],row['brand_id'], row['full_link'], row['img_src'], row['post_date']))
             cur.execute("COMMIT;")
     except Exception as e:
             cur.execute("ROLLBACK;")
@@ -91,9 +121,10 @@ with DAG(
         tags=['ETL','Instagram','Snowflake','incremental'],
         schedule= '5 0 * * *',  # 매일 자정 5분 후 실행
 ) as dag:
-        
-    filename = "amomento"
+    
+    brand_id = "amomento.co"
+    brandname = "amomento"
     schema = "RAW_DATA"
     table = "INSTAGRAM_POSTS"
 
-    extract_instagram_data(filename, debug=True) >> load_to_snowflake(filename, schema, table)
+    extract_instagram_data(brand_id, brandname, debug=True) >> load_to_snowflake(brandname, schema, table)
