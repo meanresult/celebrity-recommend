@@ -36,7 +36,49 @@ def populate_table_via_stage(cur, table, file_path):
 
     # Stage로부터 해당 테이블로 벌크 업데이트
     copy_query = f"""
-        COPY INTO {table}
+        COPY INTO {table}(
+            post_id,
+            insta_id,
+            brand_name,
+            brand_id,
+            full_link,
+            img_src,
+            post_date
+        )
+        FROM {table_stage}/{file_name}
+        FILE_FORMAT = (
+            TYPE = 'CSV'
+            FIELD_OPTIONALLY_ENCLOSED_BY = '"' 
+            SKIP_HEADER = 1
+        )
+    """
+    cur.execute(copy_query)
+
+##################################
+# 💌 3.1 스노우플레이크 테이블에 스테이지를 통해 데이터 적재 함수
+##################################
+def populate_table_via_stage_v2(cur, table, file_path):
+
+    table_stage = f"@%{table}"  # 테이블 스테이지 사용
+    file_name = os.path.basename(file_path)
+
+    # Internal table stage에 파일을 복사
+    # 보통 이때 파일은 압축이 됨 (GZIP 등)
+    cur.execute(f"PUT file://{file_path} {table_stage};")
+
+    # Stage로부터 해당 테이블로 벌크 업데이트
+    copy_query = f"""
+        COPY INTO {table}(
+            post_id,
+            insta_id,
+            brand_name,
+            brand_id,
+            full_link,
+            img_src,
+            post_date,
+            tagged_insta_id,
+            tagged_insta_id_cnt
+        )
         FROM {table_stage}/{file_name}
         FILE_FORMAT = (
             TYPE = 'CSV'
@@ -60,5 +102,15 @@ def get_next_day(date_str):
     return (date_obj + timedelta(days=1)).strftime('%Y-%m-%d')
 
 
-def get_logical_date(context):
-    return context['logical_date']
+##################################
+# 💌 5. get_last_day: 다음 날짜 가져오는 함수
+##################################
+def get_last_day(date_str):
+    """
+    'YYYY-MM-DD' 형식의 날짜 문자열이 주어지면, 동일한 형식의 문자열로 다음 날짜를 반환
+    """
+    # 먼저 date_str을 datetime 객체로 변환
+    date_obj = datetime.strptime(date_str, "%Y-%m-%d")
+
+    # 다음날 날짜를 계산
+    return (date_obj - timedelta(days=1)).strftime('%Y-%m-%d')

@@ -156,7 +156,7 @@ def load_to_snowflake(filename, schema, table):
 
 
 with DAG(
-        dag_id="insta_to_snowflake_dag_v3_lemaire",
+        dag_id="insta_to_snowflake_dag_v4_lemaire",
         description="Instagram to Snowflake ETL DAG",
         start_date=datetime(2026, 1, 8),
         catchup=False,

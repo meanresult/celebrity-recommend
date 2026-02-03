@@ -31,6 +31,29 @@ def main():
             page.fill("input[name='password']", PW)
             page.click("button[type='submit']")
 
+        # ✅ 로그인 완료 대기: URL이 login이 아니게 되거나, 홈/피드 요소가 뜰 때까지
+        page.wait_for_timeout(15000)
+
+        try:
+            btn = page.get_by_role("button", name="정보 저장")
+            if btn.first.is_visible(timeout=1000):
+                btn.first.click(timeout=2000)
+                page.wait_for_timeout(500)
+        except:
+            pass
+
+        # ✅ 쿠키에 sessionid가 생겼는지 체크
+        cookies = context.cookies()
+        cookie_names = sorted([c["name"] for c in cookies])
+        print("cookie_names:", cookie_names)
+        print("current_url:", page.url)
+
+        if "sessionid" not in cookie_names:
+            # 진단용 스크린샷
+            page.screenshot(path="login_failed.png", full_page=True)
+            raise RuntimeError("sessionid가 없어서 저장 중단. login_failed.png 확인 필요")
+
+
         # 로그인 세션 저장
         context.storage_state(path=STATE_PATH)
         print(f"✅ 저장 완료: {STATE_PATH}")

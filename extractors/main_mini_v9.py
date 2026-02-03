@@ -41,7 +41,7 @@ def wait_for_sessionid(page, timeout=20):
 #########################################
 def ensure_logged_in(page, LOGIN_URL, USERNAME, PW):
     # 1) 먼저 홈으로 가서 세션이 먹는지 확인
-    page.goto("https://www.instagram.com/", wait_until="domcontentloaded") 
+    page.goto("https://www.instagram.com/", wait_until="domcontentloaded")
     page.wait_for_timeout(1000)
 
     # 2) login으로 튕겼으면 그때만 로그인
@@ -169,8 +169,7 @@ def extract_post_data(page, href):
         alt = imgs.nth(i).get_attribute("alt") or ""
         # alt 안에서 @계정들 추출
         found = MENTION_RE.findall(alt)
-        cleaned = [t.rstrip(".,!?:;") for t in found]
-        tags.extend(cleaned)
+        tags.extend(found)
     # 중복 제거 + 순서 유지
     seen = set()
     tags = [t for t in tags if not (t in seen or seen.add(t))]
@@ -187,166 +186,105 @@ def extract_post_data(page, href):
 
     return post_id, insta_id, full_link, src, insta_tag,tags_cnt
 
-#########################################
-# 게시물 링크 한번에 가져오기 
-#########################################
-def snapshot_post_urls(page):
-    hrefs = page.eval_on_selector_all(
-    "a[href*='/p/']",
-    "elements => elements.map(el => el.getAttribute('href'))"
-    ) # 게시물 링크들 한번에 스냅샷
-
-    seen = set() # 중복 제거용 세트
-    full_hrefs = [] # 최종 링크 리스트
-
-    for href in hrefs:
-        
-        href = href.split("?")[0]  # 쿼리스트링 제거
-        if "/c/" in href:
-            continue  # 광고 게시물 스킵
-
-        if href not in seen:
-            seen.add(href)
-            full_hrefs.append(href)
-        else:
-            continue
-
-    return full_hrefs
-
 
 
 #########################################
 # 크롤링 함수 메인
 #########################################
-def collect_posts_with_scroll(page, brand_id, brand_name, scroll_y, MAX_SCROLLS, wait_ms, KST, target_day):
+def collect_posts_with_scroll(page, brand_id, brand_name, scroll_y, wait_ms, KST, target_day):
     """스크롤하면서 게시물 열어보고 target_day만 수집"""
     posts = []
-    all_seen = set()
-    past_date_streak = 0 # 스냅샷 안 목표게시물 보다 이전 데이터 수
-    no_change_count = 0 # 현재 스냅샷 까지 더한 총 스냅샷 갯수와 이전 스냅샷 총갯수 비교
-    scroll_count = 0 # 스크롤 카운트 
-    popup_fail_cnt = 0 # 파업 실패 카운트
-    parsed_fail = 0 # 날짜 수집 실패 횟수 
+    seen = set()
+    past_date_streak = 0
+    no_change_count = 0  # ✅ 카드 증가 없는 연속 횟수
 
-    # 종료 트리거 
-    stop_early = False
-    stop_reason = None
+    while True:
+        links = page.locator("a[href*='/p/']")
+        total_links = links.count()
+        print(f"현재 화면 카드 수: {total_links}")
 
-    while scroll_count < MAX_SCROLLS and not stop_early:
-        # 현재 화면의 게시물 URL 스냅샷
-        urls = snapshot_post_urls(page)
-        print(f"[스크롤 {scroll_count}] 스냅샷된 게시물: {len(urls)}개")
+        # ✅ 현재 화면에 로딩된 카드들을 한 바퀴 훑기
+        for s in range(total_links):
+            print(f"[카드 {s+1}] 현재 카드 수: {total_links}, 수집된 posts: {len(posts)}")
 
-        before_count = len(all_seen)
-        new_urls = [url for url in urls if url not in all_seen]
-        
-        print(f"새로운 게시물: {len(new_urls)}개")
+            link = links.nth(s)
+            href = link.get_attribute("href")
+            print(f"[카드 {s}] href:", href)
 
-        # 새로운 게시물 처리
-        for url in new_urls:
-            all_seen.add(url)
-            
-            try:
-                print(f"처리 중: {url}")
-                
-                # ✅ 개선: JavaScript로 직접 클릭 (오버레이 회피)
-                page.evaluate(f"""
-                    () => {{
-                        const link = document.querySelector('a[href="{url}"]');
-                        if (link) link.click();
-                    }}
-                """)
-                
-                page.wait_for_timeout(2000)
-                
-                # 팝업이 열렸는지 확인
-                try:
-                    page.wait_for_selector("article", state="visible", timeout=5000)
-                except:
-                    print(f"⚠️ 팝업 로드 실패: {url}")
-                    popup_fail_cnt += 1
-                    page.keyboard.press("Escape")
-                    continue
-
-                # 날짜 파싱
-                post_date = parse_post_date_kst(page, KST)
-                if post_date is None:
-                    print(f"⚠️ 날짜 추출 실패 → 스킵{url}")
-                    parsed_fail += 1
-                    page.keyboard.press("Escape")
-                    page.wait_for_timeout(500)
-                    continue
-
-                print(f"목표: {target_day} | 실제: {post_date}")
-
-                # 종료 조건: 연속으로 오래된 게시물 발견
-                if post_date < target_day:
-                    past_date_streak += 1
-                    print(f"📌 {past_date_streak}번째 연속 과거 게시물")
-                    
-                    if past_date_streak >= 5:
-                        print("✅ 5번 연속 과거 게시물 → 수집 종료(조기 종료 플래그)")
-                        stop_early = True
-                        stop_reason = "past_date_streak>=5"
-                        page.keyboard.press("Escape")
-                        break  
-                    
-                    page.keyboard.press("Escape")
-                    page.wait_for_timeout(500)
-                    continue
-                else:
-                    past_date_streak = 0
-
-                # target_day 게시물만 수집
-                if post_date == target_day:
-                    post_id, insta_id, full_link, src, insta_tag, tags_cnt = extract_post_data(page, url)
-                    posts.append((
-                        post_id, insta_id, brand_name, brand_id, 
-                        full_link, src, target_day, insta_tag, tags_cnt
-                    ))
-                    print(f"✅ 수집 완료 ({len(posts)}개): {full_link}")
-
-                # 팝업 닫기
-                page.keyboard.press("Escape")
-                page.wait_for_timeout(500)
-
-            except Exception as e:
-                print(f"❌ 오류 발생: {url} - {str(e)}")
-                try:
-                    page.keyboard.press("Escape")
-                    page.wait_for_timeout(500)
-                except:
-                    pass
+            if not href:
+                print(f"[카드 {s}] ❌ href 없음 → 스킵")
                 continue
-        
-        if stop_early:
-            break
 
-        # 스크롤 후 새 게시물 체크
-        after_count = len(all_seen)
-        new_count = after_count - before_count
+            if href in seen:
+                print(f"[카드 {s}] 🔁 중복 href → 스킵 ({href})")
+                continue
 
-        if new_count == 0:
+            seen.add(href)
+
+            # 상세 열기
+            link.click()
+            page.wait_for_timeout(1200)  # 2000은 너무 길 수 있어 우선 줄임(필요 시 조절)
+
+            # ✅ 날짜 판단: target_day가 아니라 post_date를 체크해야 함
+            post_date = parse_post_date_kst(page, KST)
+            if post_date is None:
+                print("포스팅 날짜 추출 없음 → 건너뜀")
+                page.go_back()
+                page.wait_for_timeout(500)
+                continue
+
+            print(f"게시물[{s+1}] 목표날짜: {target_day}, 포스팅날짜: {post_date}")
+
+            # 종료조건: 목표일 이전 게시물 연속 발견
+            if post_date < target_day:
+                past_date_streak += 1
+                page.go_back()
+                page.wait_for_timeout(500)
+                print(f"📌 {past_date_streak}번째 연속 목표일 이전 게시물")
+
+                if past_date_streak >= 3:
+                    print("📌 3번 연속 목표일 이전 게시물 → 수집 종료")
+                    return posts
+
+                continue
+            else:
+                past_date_streak = 0
+
+            # target_day만 수집
+            if post_date == target_day:
+                post_id, insta_id, full_link, src, insta_tag, tags_cnt = extract_post_data(page, href)
+                posts.append((post_id, insta_id, brand_name, brand_id, full_link, src, target_day, insta_tag, tags_cnt))
+                print("✅ 수집됨:", full_link, " / posts:", len(posts))
+
+            # 목록으로 복귀
+            page.go_back()
+            page.wait_for_timeout(500)
+
+
+        # ✅ 한 번에 크게 내리기보다 “다음 로딩 유도” 정도로만 스크롤
+        page.mouse.wheel(0, scroll_y)
+        page.wait_for_timeout(wait_ms)
+        print(
+                f'''
+                목록 복귀 완료. 현재 수집된 posts: {len(posts)}
+                --------------------------------------------------------
+                '''
+            )
+
+        new_count = page.locator("a[href*='/p/']").count()
+
+        # ✅ 카드 증가 없으면 연속 카운트
+        if new_count == total_links:
             no_change_count += 1
-            print(f"⚠️ 새 게시물 없음 ({no_change_count}/3)")
+            print(f"📌 스크롤해도 카드 증가 없음(연속 {no_change_count}회)")
+            if no_change_count >= 3:
+                print("📌 2번 연속 카드 증가 없음 → 종료")
+                break
         else:
             no_change_count = 0
 
-        if no_change_count >= 3:
-            print("✅ 3번 연속 새 게시물 없음 → 종료")
-            break
-
-        # 스크롤
-        print(f"스크롤 진행 중... (누적: {after_count}개, 수집: {len(posts)}개)")
-        page.mouse.wheel(0, scroll_y)
-        page.wait_for_timeout(wait_ms)
-        scroll_count += 1
-
-    print(f"📊 최종 수집: {len(posts)}개 게시물")
-    print(f"팝업창 로딩 실패 건 수 : {popup_fail_cnt}개")
-    print(f"날짜 수집 실패 횟수: {parsed_fail}개")
-    print(f"종료 사유: {stop_reason}")
     return posts
+
 
 
 
@@ -359,7 +297,6 @@ def run(
     brand_name: str = None,
     brand_id: str = None,
     scroll_y: int = 700,
-    MAX_SCROLLS: int = 50,
     wait_ms: int = 5000,
     headless: bool = True,
     target_day: datetime = None,
@@ -380,7 +317,6 @@ def run(
             brand_id=brand_id,
             brand_name=brand_name,
             scroll_y=scroll_y,
-            MAX_SCROLLS =MAX_SCROLLS,
             wait_ms=wait_ms,
             KST=KST,
             target_day=target_day
@@ -388,8 +324,7 @@ def run(
         
 
         browser.close()
-    print(f'✅수집된 데이터 type 확인')
-    print(posts[0:1])  # 수집된 데이터 일부 출력
+    print(posts[0:2])  # 수집된 데이터 일부 출력
     return posts  # or filename
 
 def main():

@@ -1,11 +1,14 @@
 # "그 컴퓨터에 어떤 프로그램을 설치할지"
 
+# 기본 라이브러리
 requests
 beautifulsoup4
 lxml
-apache-airflow-providers-snowflake
-snowflake-connector-python
 yfinance
 playwright
-requests
 python-dotenv
+openpyxl
+
+# snowflake 설치 
+apache-airflow-providers-snowflake
+snowflake-connector-python

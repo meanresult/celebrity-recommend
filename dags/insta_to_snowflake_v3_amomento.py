@@ -31,13 +31,11 @@ def print_run_date():
 
 @task
 def extract_instagram_data(brand_id,brandname, debug: bool = True):
-    from extractors.main_mini_v10 import run
+    from extractors.main_mini_v9 import run
     context = get_current_context()
 
     # Airflow에게 어느 날짜의 데이터를 읽을지 문의
-    logical_date_KST = context['logical_date']# .in_timezone("Asia/Seoul")
-
-    date_to_process = str(logical_date_KST)[:10]
+    date_to_process = str(context['logical_date'])[:10]
     following_day = util.get_next_day(date_to_process)
     
     if debug:
@@ -156,18 +154,18 @@ def load_to_snowflake(filename, schema, table):
 
 
 with DAG(
-        dag_id="insta_to_snowflake_dag_v4_cos",
+        dag_id="insta_to_snowflake_dag_v3_amomento",
         description="Instagram to Snowflake ETL DAG",
         start_date=datetime(2026, 1, 8),
         catchup=False,
         tags=['ETL','Instagram','Snowflake','incremental'],
-        schedule= '10 15 * * *',  # 매일 자정 5분 후 실행
+        schedule= '5 15 * * *',   # (UTC 기준) 매일 15:05 UTC = 매일 00:05 KST
 ) as dag:
     
-    brand_id = "cosstores"
-    brandname = "cos"
+    brand_id = "amomento.co"
+    brandname = "amomento"
     schema = "RAW_DATA"
     table = (f"INSTAGRAM_POSTS")
     table_tag = (f"{brandname}_posted_tag")
 
-    print_run_date() >>extract_instagram_data(brand_id, brandname, debug=True) >> load_to_snowflake(brandname, schema, table)
+    print_run_date() >> extract_instagram_data(brand_id, brandname, debug=True) >> load_to_snowflake(brandname, schema, table)

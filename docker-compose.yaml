@@ -70,18 +70,21 @@ x-airflow-common:
     AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
     # WARNING: Use _PIP_ADDITIONAL_REQUIREMENTS option ONLY for a quick checks
     # for other purpose (development, test and especially production usage) build/extend Airflow image.
-    _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:- yfinance apache-airflow-providers-snowflake snowflake-connector-python}
+    _PIP_ADDITIONAL_REQUIREMENTS: ''
     # The following line can be used to set a custom config file, stored in the local config folder
     # If you want to use it, outcomment it and replace airflow.cfg with the name of your config file
     # AIRFLOW_CONFIG: '/opt/airflow/config/airflow.cfg'
     PYTHONPATH: /opt/airflow
+    HOST_PROJECT_ROOT: ${HOST_PROJECT_ROOT}
   volumes:
     - ${AIRFLOW_PROJ_DIR:-.}/dags:/opt/airflow/dags
     - ${AIRFLOW_PROJ_DIR:-.}/logs:/opt/airflow/logs
     - ${AIRFLOW_PROJ_DIR:-.}/config:/opt/airflow/config
     - ${AIRFLOW_PROJ_DIR:-.}/plugins:/opt/airflow/plugins
     - ${AIRFLOW_PROJ_DIR:-.}/extractors:/opt/airflow/extractors
+    - ${AIRFLOW_PROJ_DIR:-.}/transform/insta_dbt:/opt/airflow/transform/insta_dbt
     - ${AIRFLOW_PROJ_DIR:-.}/secrets/storage_state.json:/opt/airflow/secrets/storage_state.json:ro
+    - /var/run/docker.sock:/var/run/docker.sock 
 
   user: "${AIRFLOW_UID:-50000}:0"
   depends_on:
@@ -106,6 +109,36 @@ services:
       retries: 5
       start_period: 5s
     restart: always
+
+  streamlit:
+    build:
+      context: .
+      dockerfile: docker/StreamlitDockerfile
+    ports:
+      - "8501:8501"
+    environment:
+      - SNOWFLAKE_ACCOUNT=${SNOWFLAKE_ACCOUNT}
+      # ... 나머지 환경변수들
+    volumes:
+      - ./streamlit:/app
+    env_file:
+      - .env
+    restart: unless-stopped
+    # networks 설정 제거!
+
+  dbt:
+    build: 
+      context: . # 현재 디렉토리 기준으로 도커파일 찾아라
+      dockerfile: docker/DbtDockerfile # dbt 전용 도커파일
+    # 컨테이너 들어갔을 때 위치 
+    working_dir: /usr/app
+    # ./이 있으면 로컬과 연결될 거야 
+    volumes:
+      - ./transform/insta_dbt:/usr/app
+      - ./.dbt:/root/.dbt
+    env_file:
+      - .env
+    entrypoint: ["dbt"]
 
   airflow:
     <<: *airflow-common

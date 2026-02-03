@@ -1,7 +1,3 @@
-"""
-목표 : 컬럼 추가 마지막 크롤링 날짜, 활성화 여부 
-"""
-
 from airflow import DAG
 from airflow.models import Variable
 from airflow.decorators import task
@@ -37,13 +33,7 @@ def extract_instagram_data(brand_id,brandname, debug: bool = True):
         headless=True,  # Airflow에서는 브라우저 안 보이게
         target_day=date_to_process
     )
-    df = pd.DataFrame(posts, columns=["post_id",
-                                      "insta_id",
-                                      "brand_name", 
-                                      "brand_id", 
-                                      "full_link", 
-                                      "img_src", 
-                                      "post_date"])
+    df = pd.DataFrame(posts, columns=["post_id","insta_id","brand_name", "brand_id", "full_link", "img_src", "post_date"])
     
     tmp_dir = Variable.get("data_dir", default_var="/tmp/")
     file_path = util.get_file_path(tmp_dir,brandname,get_current_context())
@@ -73,16 +63,13 @@ def load_to_snowflake(filename, schema, table):
             brand_id STRING,
             full_link STRING,
             img_src STRING,
-            post_date DATE,
-            first_seen_at TIMESTAMP_TZ,
-            last_seen_at TIMESTAMP_TZ,
-            active BOOLEAN
+            post_date DATE
         );""")
 
 
         cur.execute(f"""
             CREATE TEMPORARY TABLE {staging_table}(
-                post_id STRING ,
+                post_id STRING primary key,
                 insta_id STRING,
                 brand_name STRING,
                 brand_id STRING,
@@ -92,7 +79,7 @@ def load_to_snowflake(filename, schema, table):
             );
         """) #
 
-        util.populate_table_via_stage_v2(cur,staging_table , file_path)
+        util.populate_table_via_stage(cur,staging_table , file_path)
         
         cur.execute(f"SELECT COUNT(*) FROM {staging_table}")
         row_count = cur.fetchone()[0]
@@ -104,18 +91,12 @@ def load_to_snowflake(filename, schema, table):
             MERGE INTO {table} AS target
             USING {staging_table} AS stage
             on target.post_id = stage.post_id
-            WHEN MATCHED THEN
-                UPDATE SET
-                last_seen_at = CURRENT_TIMESTAMP(),
-                active       = TRUE
             WHEN NOT MATCHED THEN
-                INSERT (post_id, insta_id, brand_name, brand_id, full_link,img_src,post_date,first_seen_at,last_seen_at,active)
-                VALUES (stage.post_id, stage.insta_id, stage.brand_name, stage.brand_id, stage.full_link, stage.img_src, stage.post_date, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP(), TRUE);
+                INSERT (post_id, insta_id, brand_name, brand_id, full_link,img_src,post_date)
+                VALUES (stage.post_id, stage.insta_id, stage.brand_name, stage.brand_id, stage.full_link, stage.img_src, stage.post_date);
         """
 
-        print("==== UPSERT SQL ====")
-        print(upsert_sql)
-        print("====================")
+
         cur.execute(upsert_sql)
         print(f"스노우플레이크 적재완료: {staging_table},{file_path}")
 
@@ -127,17 +108,17 @@ def load_to_snowflake(filename, schema, table):
         cur.close()
 
 with DAG(
-        dag_id="insta_to_snowflake_dag_v3",
+        dag_id="insta_to_snowflake_dag_v2",
         description="Instagram to Snowflake ETL DAG",
         start_date=datetime(2026, 1, 8),
         catchup=False,
         tags=['ETL','Instagram','Snowflake','incremental'],
-        schedule= '1 15 * * *',  # 매일 자정 5분 후 실행
+        schedule= '5 0 * * *',  # 매일 자정 5분 후 실행
 ) as dag:
     
     brand_id = "amomento.co"
     brandname = "amomento"
-    schema = "ADHOC"
-    table = (f"{brandname}_POSTS")
+    schema = "RAW_DATA"
+    table = "INSTAGRAM_POSTS"
 
     extract_instagram_data(brand_id, brandname, debug=True) >> load_to_snowflake(brandname, schema, table)

@@ -69,7 +69,16 @@ def extract_instagram_data(brand_id,brandname, debug: bool = True):
     file_path = util.get_file_path(tmp_dir,brandname,get_current_context())
 
     df.to_csv(file_path, index=False, encoding='utf-8-sig')
-    print(f"Data saved to {file_path}, total records: {len(df)}")
+    print(
+    f"\n"
+    f"[EXTRACT_TASK 요약]\n"
+    f"logical_date={date_to_process}\n"
+    f"brand={brandname}\n"
+    f"collected={len(posts)}\n"
+    f"Data saved to {file_path}, total records: {len(df)}"
+    # f"popup_fail={popup_fail_cnt} "
+    # f"parsed_fail={parsed_fail_cnt}"
+    )
 
     return file_path
 
@@ -83,10 +92,9 @@ def load_to_snowflake(filename, schema, table):
     tmp_dir = Variable.get("data_dir", "/tmp/")
     file_path = util.get_file_path(tmp_dir, filename, get_current_context())
 
-    # 실행 날짜 불러오기 
-    date_to_process = str(get_current_context()['logical_date'])[:10] # 2024-01-08
     try:
         cur.execute(f"USE SCHEMA {schema};")
+        cur.execute("BEGIN;")
         cur.execute(f"""CREATE TABLE IF NOT EXISTS {table} (
             post_id STRING primary key,
             insta_id STRING,
@@ -120,10 +128,34 @@ def load_to_snowflake(filename, schema, table):
         util.populate_table_via_stage_v2(cur,staging_table , file_path)
         
         cur.execute(f"SELECT COUNT(*) FROM {staging_table}")
+        #✅테이블 1건도 없는지 확인 
         row_count = cur.fetchone()[0]
-
         if row_count == 0:
             raise ValueError("스테이징에 적재된 데이터가 없습니다")
+
+        #✅post_id 중복 체크
+        cur.execute(f"""
+            SELECT post_id, COUNT(*) AS cnt
+            FROM {staging_table}
+            GROUP BY post_id
+            HAVING COUNT(*) > 1;
+        """)
+        dup_rows = cur.fetchall()
+        if dup_rows:
+            # 중복 일부만 로그로 보여주기
+            sample = ", ".join([f"{r[0]}({r[1]})" for r in dup_rows[:5]])
+            raise ValueError(f"스테이징 post_id 중복 발견: {sample} ... (총 {len(dup_rows)}개)")
+        
+        # ✅ post_id 컬럼 NULL/공백 체크
+        cur.execute(f"""
+            SELECT COUNT(*)
+            FROM {staging_table}
+            WHERE post_id IS NULL OR TRIM(post_id) = '';
+        """)
+        bad_post_id = cur.fetchone()[0]
+        if bad_post_id > 0:
+            raise ValueError(f"스테이징에 비어있는 post_id가 {bad_post_id}건 존재합니다.")
+        
 
         upsert_sql = f"""
             MERGE INTO {table} AS target
@@ -137,8 +169,10 @@ def load_to_snowflake(filename, schema, table):
                 tagged_insta_id_cnt = stage.tagged_insta_id_cnt
 
             WHEN NOT MATCHED THEN
-                INSERT (post_id, insta_id, brand_name, brand_id, full_link,img_src,post_date,first_seen_at,last_seen_at,active,tagged_insta_id,tagged_insta_id_cnt)
-                VALUES (stage.post_id, stage.insta_id, stage.brand_name, stage.brand_id, stage.full_link, stage.img_src, stage.post_date, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP(), TRUE,stage.tagged_insta_id,stage.tagged_insta_id_cnt);
+                INSERT (post_id, insta_id, brand_name, brand_id, full_link,img_src,post_date,
+                        first_seen_at,last_seen_at,active,tagged_insta_id,tagged_insta_id_cnt)
+                VALUES (stage.post_id, stage.insta_id, stage.brand_name, stage.brand_id, stage.full_link, stage.img_src, 
+                        stage.post_date, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP(), TRUE,stage.tagged_insta_id,stage.tagged_insta_id_cnt);
         """
 
         print("==== UPSERT SQL ====")

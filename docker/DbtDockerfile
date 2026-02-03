@@ -1,0 +1,25 @@
+# 1) 파이썬이 깔린 가벼운 리눅스 컴퓨터를 베이스로 씀
+FROM python:3.11-slim
+
+# 2) 컨테이너 내부에서 작업할 폴더(현재 위치)를 /usr/app로 지정
+WORKDIR /usr/app
+
+# git 설치 (패키지 매니저)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+
+# 3) uv 설치 (설치 도구)
+RUN pip install --no-cache-dir uv
+
+# 4) 설치 목록 파일을 컨테이너로 복사 (컨테이너에 포함시켜라)
+COPY requirements_dbt.txt .
+
+# 5) requirements.txt에 적힌 패키지들을 설치 (여기서 uv 사용 끝)
+RUN uv pip install --system -r requirements_dbt.txt
+
+# 6) dbt 프로젝트 폴더를 컨테이너 내부로 복사
+COPY ./transform/insta_dbt/ ./transform/insta_dbt/
+
+# 7) 컨테이너를 실행하면 기본적으로 dbt 명령이 실행되게 설정
+ENTRYPOINT ["dbt"]
