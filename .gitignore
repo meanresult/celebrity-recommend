@@ -1,7 +1,30 @@
-.env
-.DS_Store
+
+# Python
+.venv/
 __pycache__/
 *.pyc
+
+# Env
+.env
+.python-version
+
+# Logs
+logs/
+
+# Secrets
+secrets/*
+!secrets/.gitkeep
+
+# dbt
+.dbt/
+target/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# etc
 .ipynb_checkpoints/
 *.json
-secrets/
+*copy.py
+tutorial.txt
