@@ -8,7 +8,7 @@ import os
 ##################################
 
 def return_snowflake_conn(snowflake_conn_id):
-    hook = SnowflakeHook(snowflake_conn_id="snowflake_conn")
+    hook = SnowflakeHook(snowflake_conn_id=snowflake_conn_id)
 
     conn = hook.get_conn()
     return conn.cursor()

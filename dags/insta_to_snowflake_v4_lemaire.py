@@ -78,7 +78,7 @@ def load_to_snowflake(filename, schema, table):
 
     staging_table = f"temp_{table}"
 
-    cur = util.return_snowflake_conn("snowflake_fsh_conn")
+    cur = util.return_snowflake_conn("snowflake_conn")
 
     tmp_dir = Variable.get("data_dir", "/tmp/")
     file_path = util.get_file_path(tmp_dir, filename, get_current_context())

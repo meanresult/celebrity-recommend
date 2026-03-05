@@ -44,7 +44,7 @@ def extract_instagram_data(brand_id,brandname, debug: bool = True):
 
 @task
 def load_to_snowflake(filename, schema, table):
-    cur = util.return_snowflake_conn("snowflake_fsh_conn")
+    cur = util.return_snowflake_conn("snowflake_conn")
     context = get_current_context()
 
     date_to_process = str(context['logical_date'])[:10] # 2024-01-08
