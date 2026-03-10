@@ -1,16 +1,24 @@
-# save_state.py
-from playwright.sync_api import sync_playwright
-from dotenv import load_dotenv
 import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+from playwright.sync_api import sync_playwright
 
 load_dotenv()
-USERNAME = "pywh_"
+USERNAME = os.getenv("ID")
 PW = os.getenv("PW")
 
 LOGIN_URL = "https://www.instagram.com/accounts/login/"
-STATE_PATH = "storage_state.json"
+BASE_DIR = Path(__file__).resolve().parent
+STATE_PATH = BASE_DIR / "storage_state.json"
+FAILSHOT_PATH = BASE_DIR / "login_failed.png"
 
 def main():
+    if not USERNAME or not PW:
+        raise RuntimeError(
+            ".env에서 ID/PW를 읽지 못했습니다. 프로젝트 루트에 .env가 있는지 확인하세요."
+        )
+
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False)  # 로컬은 눈으로 확인하기 쉬움
         context = browser.new_context()
@@ -50,12 +58,14 @@ def main():
 
         if "sessionid" not in cookie_names:
             # 진단용 스크린샷
-            page.screenshot(path="login_failed.png", full_page=True)
-            raise RuntimeError("sessionid가 없어서 저장 중단. login_failed.png 확인 필요")
+            page.screenshot(path=str(FAILSHOT_PATH), full_page=True)
+            raise RuntimeError(
+                f"sessionid가 없어서 저장 중단. 실패 화면: {FAILSHOT_PATH}"
+            )
 
 
         # 로그인 세션 저장
-        context.storage_state(path=STATE_PATH)
+        context.storage_state(path=str(STATE_PATH))
         print(f"✅ 저장 완료: {STATE_PATH}")
 
         browser.close()

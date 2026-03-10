@@ -1,0 +1,40 @@
+version: 2
+
+models:
+  - name: group_by_tagged_post
+    description: 게시물별 tagged 계정을 행 단위로 풀어낸 stage 모델
+    columns:
+      - name: pk_tagged_post
+        description: post_id, tag_pos, tagged_account 기준 surrogate key
+        tests:
+          - not_null
+          - unique
+      - name: tagged_account
+        description: 정제된 tagged 인스타그램 계정
+        tests:
+          - not_null
+      - name: brand_name
+        description: 원본 게시물의 브랜드명
+        tests:
+          - not_null
+      - name: brand_id
+        description: 원본 게시물의 브랜드 인스타그램 계정 ID
+        tests:
+          - not_null
+      - name: post_date
+        description: 원본 게시물 작성일
+        tests:
+          - not_null
+
+  - name: cross_brand_accounts
+    description: 계정별 함께 태그한 계정을 집계한 mart 모델
+    columns:
+      - name: insta_id
+        description: 인스타그램 계정 ID
+        tests:
+          - not_null
+          - unique
+      - name: tagged_account_count
+        description: 계정별 distinct tagged_account 수
+        tests:
+          - not_null

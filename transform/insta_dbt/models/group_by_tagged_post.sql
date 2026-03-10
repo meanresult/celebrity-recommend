@@ -3,6 +3,9 @@ with base as (
     select
         post_id
         ,insta_id
+        ,brand_name
+        ,brand_id
+        ,post_date
         ,tagged_insta_id
         ,tagged_insta_id_cnt
     
@@ -15,6 +18,9 @@ split as (
     select
         post_id
         ,insta_id
+        ,brand_name
+        ,brand_id
+        ,post_date
         ,tagged_insta_id_cnt
         ,split(tagged_insta_id, ',') as tag_arr
     from base
@@ -24,28 +30,53 @@ flattened as (
     select
         post_id
         ,insta_id
+        ,brand_name
+        ,brand_id
+        ,post_date
         ,f.index + 1 as tag_pos
         ,trim(f.value::string) as tagged_account_raw
-        ,tag_pos || '/' || tagged_insta_id_cnt || '-' || post_id || '_' || tagged_account_raw as pk_tagged_post
     from split,
     lateral flatten(input => tag_arr) f
 ),
 
 clean as (
   select
-    pk_tagged_post,
     tag_pos,
     post_id,
     insta_id,
+    brand_name,
+    brand_id,
+    post_date,
     -- 정제: 공백 제거 + 앞의 @ 제거
     lower(
-    rtrim(
-        regexp_replace(tagged_account_raw, '^@', ''),
-        '.'
-    )) as tagged_account
+      rtrim(
+          regexp_replace(tagged_account_raw, '^@', ''),
+          '.'
+      )
+    ) as tagged_account
   from flattened
   where tagged_account_raw is not null
     and tagged_account_raw <> ''
+),
+
+final as (
+    select
+        md5(
+            concat_ws(
+                '||',
+                post_id,
+                tag_pos::string,
+                tagged_account
+            )
+        ) as pk_tagged_post,
+        tag_pos,
+        post_id,
+        insta_id,
+        brand_name,
+        brand_id,
+        post_date,
+        tagged_account
+    from clean
 )
 
-select * from clean
+select * from final

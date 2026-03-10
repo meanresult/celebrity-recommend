@@ -89,6 +89,40 @@ def populate_table_via_stage_v2(cur, table, file_path):
     cur.execute(copy_query)
 
 ##################################
+# 💌 3.2 스키마/테이블 보장 함수
+##################################
+def ensure_instagram_posts_table(cur, schema, table):
+    cur.execute("SELECT CURRENT_DATABASE()")
+    current_database = cur.fetchone()[0]
+
+    if not current_database:
+        raise ValueError(
+            "Snowflake connection에 기본 database가 설정되어 있지 않습니다. "
+            "Airflow Connection(snowflake_conn)의 database 값을 확인하세요."
+        )
+
+    cur.execute(f"CREATE SCHEMA IF NOT EXISTS {schema};")
+    cur.execute(f"USE SCHEMA {schema};")
+    cur.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS {table} (
+            post_id STRING primary key,
+            insta_id STRING,
+            brand_name STRING,
+            brand_id STRING,
+            full_link STRING,
+            img_src STRING,
+            post_date DATE,
+            first_seen_at TIMESTAMP_TZ,
+            last_seen_at TIMESTAMP_TZ,
+            active BOOLEAN,
+            tagged_insta_id STRING,
+            tagged_insta_id_cnt NUMBER
+        );
+        """
+    )
+
+##################################
 # 💌 4. get_next_day: 다음 날짜 가져오는 함수
 ##################################
 def get_next_day(date_str):

@@ -20,24 +20,25 @@ def print_run_date():
     ld = context["logical_date"]
     dis = context["data_interval_start"]
     die = context["data_interval_end"]
+    logical_date_kst = ld.in_timezone("Asia/Seoul")
 
     print("LOGICAL_DATE raw:", ld, "tz:", ld.tzinfo)
     print("START raw:", dis, "tz:", dis.tzinfo)
     print("END   raw:", die, "tz:", die.tzinfo)
 
-    print("LOGICAL_DATE KST:", ld.in_timezone("Asia/Seoul"))
+    print("LOGICAL_DATE KST:", logical_date_kst)
     print("START KST:", dis.in_timezone("Asia/Seoul"))
     print("END   KST:", die.in_timezone("Asia/Seoul"))
+    print("DATE_TO_PROCESS KST:", logical_date_kst.strftime("%Y-%m-%d"))
 
 @task
 def extract_instagram_data(brand_id,brandname, debug: bool = True):
-    from extractors.main_mini_v10 import run
+    from extractors.main_mini_v11 import run
     context = get_current_context()
 
     # Airflow에게 어느 날짜의 데이터를 읽을지 문의
-    logical_date_KST = context['logical_date'] #.in_timezone("Asia/Seoul")
-
-    date_to_process = str(logical_date_KST)[:10]
+    logical_date_kst = context["logical_date"].in_timezone("Asia/Seoul")
+    date_to_process = logical_date_kst.strftime("%Y-%m-%d")
     following_day = util.get_next_day(date_to_process)
     
     if debug:
@@ -86,22 +87,7 @@ def load_to_snowflake(filename, schema, table):
     # 실행 날짜 불러오기 
     date_to_process = str(get_current_context()['logical_date'])[:10] # 2024-01-08
     try:
-        cur.execute(f"USE SCHEMA {schema};")
-        cur.execute(f"""CREATE TABLE IF NOT EXISTS {table} (
-            post_id STRING primary key,
-            insta_id STRING,
-            brand_name STRING,
-            brand_id STRING,
-            full_link STRING,
-            img_src STRING,
-            post_date DATE,
-            first_seen_at TIMESTAMP_TZ,
-            last_seen_at TIMESTAMP_TZ,
-            active BOOLEAN,
-            tagged_insta_id STRING,
-            tagged_insta_id_cnt NUMBER
-        );""")
-
+        util.ensure_instagram_posts_table(cur, schema, table)
 
         cur.execute(f"""
             CREATE TEMPORARY TABLE {staging_table}(

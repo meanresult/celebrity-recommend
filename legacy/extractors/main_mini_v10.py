@@ -9,6 +9,7 @@ from openpyxl import Workbook
 from datetime import datetime, timezone, timedelta
 import time
 import re 
+from pathlib import Path
 
 
 load_dotenv()
@@ -124,21 +125,35 @@ def goto_tagged(page, brand_id):
 # 한국 시간대로 확인하기 좋기 변경
 #########################################
 def parse_post_date_kst(page , KST):
-    page.wait_for_selector("time", state="visible", timeout=5000)
+    try:
+        page.wait_for_selector("time", state="visible", timeout=5000)
 
-    time_el = page.locator("time").first
-    dt_str = time_el.get_attribute("datetime")
-    if not dt_str:
-        return None, None, None
+        time_el = page.locator("time").first
+        dt_str = time_el.get_attribute("datetime")
+        if dt_str:
+            post_dt_utc = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+            post_dt_kst = post_dt_utc.astimezone(KST)
+            post_date_str = post_dt_kst.strftime('%Y-%m-%d')
+            print(f"포스팅 날짜 문자열: {post_date_str}")
+            return post_date_str
+    except Exception:
+        pass
 
-    post_dt_utc = datetime.fromisoformat(dt_str.replace("Z", "+00:00")) # 'YYYY-MM-DD' 형식으로 변환
-    
-    post_dt_kst = post_dt_utc.astimezone(KST)
+    meta_desc = page.evaluate("""
+        () => (
+            document.querySelector('meta[property="og:description"]')?.getAttribute('content') ||
+            document.querySelector('meta[name="description"]')?.getAttribute('content') ||
+            ''
+        )
+    """)
 
+    match = re.search(r'([A-Z][a-z]+ \d{1,2}, \d{4})', meta_desc)
+    if not match:
+        return None
 
-    post_date_str = post_dt_kst.strftime('%Y-%m-%d') # 'YYYY-MM-DD' 형식 문자열
+    post_dt = datetime.strptime(match.group(1), "%B %d, %Y").replace(tzinfo=KST)
+    post_date_str = post_dt.strftime('%Y-%m-%d')
     print(f"포스팅 날짜 문자열: {post_date_str}")
-
     return post_date_str
 
 
@@ -153,24 +168,29 @@ def extract_post_data(page, href):
     - 실무적으로: '수집(list) -> 저장 직전 string 변환(join)' 흐름 유지
     """
 
-    # 게시물 본문 내 이미지들(캐러셀 포함)
-    imgs = page.locator("article img")
-    count = imgs.count()
+    src = page.evaluate("""
+        () => document.querySelector('meta[property="og:image"]')?.getAttribute('content') || ''
+    """)
 
-    # 대표 이미지 src (첫 번째)
-    src = None
-    if count > 0:
-        src = imgs.first.get_attribute("src")
+    image_candidates = page.evaluate("""
+        () => Array.from(document.querySelectorAll('main img'))
+            .map((img) => ({
+                alt: img.getAttribute('alt') || '',
+                src: img.getAttribute('src') || ''
+            }))
+            .filter((item) => item.alt.startsWith('Photo by ') || item.alt.startsWith('Photo shared by '))
+    """)
 
-    # 태그 수집 (리스트 유지)
     tags = []
-    tags_cnt = []
-    for i in range(count):
-        alt = imgs.nth(i).get_attribute("alt") or ""
-        # alt 안에서 @계정들 추출
+    for item in image_candidates:
+        alt = item["alt"]
         found = MENTION_RE.findall(alt)
         cleaned = [t.rstrip(".,!?:;") for t in found]
         tags.extend(cleaned)
+
+        if not src and item["src"]:
+            src = item["src"]
+
     # 중복 제거 + 순서 유지
     seen = set()
     tags = [t for t in tags if not (t in seen or seen.add(t))]
@@ -212,6 +232,44 @@ def snapshot_post_urls(page):
             continue
 
     return full_hrefs
+
+
+#########################################
+# 디버그 스크린샷 저장
+#########################################
+def save_popup_debug_artifact(page, url, debug_dir="/tmp/insta_debug"):
+    Path(debug_dir).mkdir(parents=True, exist_ok=True)
+    post_code = url.strip("/").split("/")[-1] if url else "unknown"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    screenshot_path = os.path.join(debug_dir, f"popup_fail_{post_code}_{timestamp}.png")
+    try:
+        page.screenshot(path=screenshot_path, full_page=True)
+        return screenshot_path
+    except Exception as exc:
+        print(f"⚠️ 스크린샷 저장 실패: {exc}")
+        return None
+
+
+#########################################
+# 게시물 상세 진입 상태 판별
+#########################################
+def wait_for_post_open(page, timeout_ms=10000):
+    deadline = time.time() + (timeout_ms / 1000)
+
+    while time.time() < deadline:
+        current_url = page.url
+
+        # 전체 페이지 상세 진입
+        if "/p/" in current_url:
+            return "detail_page"
+
+        # 모달 기반 상세 진입
+        if page.locator("[role='dialog']").count() > 0 or page.locator("button[aria-label='닫기']").count() > 0:
+            return "popup"
+
+        page.wait_for_timeout(300)
+
+    return None
 
 
 
@@ -256,14 +314,22 @@ def collect_posts_with_scroll(page, brand_id, brand_name, scroll_y, MAX_SCROLLS,
                         if (link) link.click();
                     }}
                 """)
-                
-                page.wait_for_timeout(2000)
-                
-                # 팝업이 열렸는지 확인
-                try:
-                    page.wait_for_selector("article", state="visible", timeout=5000)
-                except:
+
+                open_state = wait_for_post_open(page, timeout_ms=10000)
+
+                if open_state == "popup":
+                    print(f"팝업 상세 진입 성공: {url}")
+                elif open_state == "detail_page":
+                    print(f"상세 페이지 이동 감지: {page.url}")
+                    page.goto(f"https://www.instagram.com{url}", wait_until="domcontentloaded")
+                    page.wait_for_timeout(3000)
+                else:
+                    screenshot_path = save_popup_debug_artifact(page, url)
                     print(f"⚠️ 팝업 로드 실패: {url}")
+                    print(f"현재 URL: {page.url}")
+                    print("팝업 또는 상세 페이지 진입을 확인하지 못했습니다.")
+                    if screenshot_path:
+                        print(f"디버그 스크린샷: {screenshot_path}")
                     popup_fail_cnt += 1
                     page.keyboard.press("Escape")
                     continue
@@ -273,8 +339,12 @@ def collect_posts_with_scroll(page, brand_id, brand_name, scroll_y, MAX_SCROLLS,
                 if post_date is None:
                     print(f"⚠️ 날짜 추출 실패 → 스킵{url}")
                     parsed_fail += 1
-                    page.keyboard.press("Escape")
-                    page.wait_for_timeout(500)
+                    if open_state == "detail_page":
+                        page.go_back()
+                        page.wait_for_timeout(1000)
+                    else:
+                        page.keyboard.press("Escape")
+                        page.wait_for_timeout(500)
                     continue
 
                 print(f"목표: {target_day} | 실제: {post_date}")
@@ -288,11 +358,19 @@ def collect_posts_with_scroll(page, brand_id, brand_name, scroll_y, MAX_SCROLLS,
                         print("✅ 5번 연속 과거 게시물 → 수집 종료(조기 종료 플래그)")
                         stop_early = True
                         stop_reason = "past_date_streak>=5"
-                        page.keyboard.press("Escape")
+                        if open_state == "detail_page":
+                            page.go_back()
+                            page.wait_for_timeout(1000)
+                        else:
+                            page.keyboard.press("Escape")
                         break  
                     
-                    page.keyboard.press("Escape")
-                    page.wait_for_timeout(500)
+                    if open_state == "detail_page":
+                        page.go_back()
+                        page.wait_for_timeout(1000)
+                    else:
+                        page.keyboard.press("Escape")
+                        page.wait_for_timeout(500)
                     continue
                 else:
                     past_date_streak = 0
@@ -307,14 +385,22 @@ def collect_posts_with_scroll(page, brand_id, brand_name, scroll_y, MAX_SCROLLS,
                     print(f"✅ 수집 완료 ({len(posts)}개): {full_link}")
 
                 # 팝업 닫기
-                page.keyboard.press("Escape")
-                page.wait_for_timeout(500)
+                if open_state == "popup":
+                    page.keyboard.press("Escape")
+                    page.wait_for_timeout(500)
+                elif open_state == "detail_page":
+                    page.go_back()
+                    page.wait_for_timeout(1000)
 
             except Exception as e:
                 print(f"❌ 오류 발생: {url} - {str(e)}")
                 try:
-                    page.keyboard.press("Escape")
-                    page.wait_for_timeout(500)
+                    if "/p/" in page.url:
+                        page.go_back()
+                        page.wait_for_timeout(1000)
+                    else:
+                        page.keyboard.press("Escape")
+                        page.wait_for_timeout(500)
                 except:
                     pass
                 continue

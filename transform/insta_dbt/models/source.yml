@@ -14,12 +14,17 @@ sources:
             # 브랜드 선정 
           - name: brand_name
             description: 브랜드 주제
+            tests:
+              - not_null
           - name: brand_id
             description: 브랜드 주제 id
 
             # 해당 브랜드를 태그한 계정 정보
           - name: post_id
             description: 포스팅 게시물 ID
+            tests:
+              - not_null
+              - unique
           - name: insta_id
             description: 인스타그램 계정 ID
           - name: full_link
