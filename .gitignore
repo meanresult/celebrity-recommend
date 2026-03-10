@@ -28,3 +28,7 @@ Thumbs.db
 *.json
 *copy.py
 tutorial.txt
+
+# Docs (internal-only)
+docs/*(내부용)*
+docs/**/*(내부용)*
