@@ -27,6 +27,8 @@ sources:
               - unique
           - name: insta_id
             description: 인스타그램 계정 ID
+          - name: insta_name
+            description: 인스타그램 프로필 표시명. 없으면 unknown
           - name: full_link
             description: 포스팅 게시물 링크
           - name: img_src

@@ -13,6 +13,12 @@ models:
         description: 정제된 tagged 인스타그램 계정
         tests:
           - not_null
+      - name: insta_id
+        description: 게시물 작성자 인스타그램 계정 ID
+        tests:
+          - not_null
+      - name: insta_name
+        description: 게시물 작성자 인스타그램 프로필 표시명. 없으면 unknown
       - name: brand_name
         description: 원본 게시물의 브랜드명
         tests:
@@ -34,7 +40,23 @@ models:
         tests:
           - not_null
           - unique
+      - name: insta_name
+        description: 게시물 작성자 인스타그램 프로필 표시명. 없으면 unknown
       - name: tagged_account_count
         description: 계정별 distinct tagged_account 수
+        tests:
+          - not_null
+
+  - name: account_tagged_accounts
+    description: 계정별 tagged_account 관계를 한 행씩 유지한 mart 모델
+    columns:
+      - name: insta_id
+        description: 인스타그램 계정 ID
+        tests:
+          - not_null
+      - name: insta_name
+        description: 게시물 작성자 인스타그램 프로필 표시명. 없으면 unknown
+      - name: tagged_account
+        description: 함께 태그된 인스타그램 계정
         tests:
           - not_null

@@ -7,8 +7,9 @@
 -- 계정별 태그한 브랜드 집계
 SELECT 
     insta_id,
-    COUNT(DISTINCT tagged_account) as tagged_account_count,
-    LISTAGG(DISTINCT tagged_account, ', ') 
+    coalesce(max(nullif(insta_name, 'unknown')), 'unknown') as insta_name,
+    COUNT(*) as tagged_account_count,
+    LISTAGG(tagged_account, ', ') 
         WITHIN GROUP (ORDER BY tagged_account) as brands_tagged
-FROM {{ ref('group_by_tagged_post') }}
+FROM {{ ref('account_tagged_accounts') }}
 GROUP BY insta_id

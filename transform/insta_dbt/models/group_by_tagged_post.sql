@@ -3,6 +3,7 @@ with base as (
     select
         post_id
         ,insta_id
+        ,insta_name
         ,brand_name
         ,brand_id
         ,post_date
@@ -18,6 +19,7 @@ split as (
     select
         post_id
         ,insta_id
+        ,insta_name
         ,brand_name
         ,brand_id
         ,post_date
@@ -30,6 +32,7 @@ flattened as (
     select
         post_id
         ,insta_id
+        ,insta_name
         ,brand_name
         ,brand_id
         ,post_date
@@ -44,6 +47,7 @@ clean as (
     tag_pos,
     post_id,
     insta_id,
+    insta_name,
     brand_name,
     brand_id,
     post_date,
@@ -72,6 +76,7 @@ final as (
         tag_pos,
         post_id,
         insta_id,
+        insta_name,
         brand_name,
         brand_id,
         post_date,
