@@ -8,6 +8,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     build-essential \
     curl \
+    docker.io \
     && rm -rf /var/lib/apt/lists/*
 
 # requirements 파일 복사 및 설치

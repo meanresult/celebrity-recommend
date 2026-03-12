@@ -62,6 +62,7 @@ x-airflow-common:
     AIRFLOW__CORE__FERNET_KEY: ''
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
     AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__CORE__HOSTNAME_CALLABLE: socket.getfqdn
     AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
     # yamllint disable rule:line-length
     # Use simple http server on scheduler for health checks
@@ -121,6 +122,7 @@ services:
       # ... 나머지 환경변수들
     volumes:
       - ./streamlit:/app
+      - /var/run/docker.sock:/var/run/docker.sock
     env_file:
       - .env
     restart: unless-stopped
@@ -142,6 +144,7 @@ services:
 
   airflow:
     <<: *airflow-common
+    hostname: airflow
     command: >
       bash -c "airflow scheduler & airflow webserver"
     ports:
