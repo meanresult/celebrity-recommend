@@ -31,7 +31,7 @@ def print_run_date():
 
 @task
 def extract_instagram_data(brand_id,brandname, debug: bool = True):
-    from extractors.main_mini_v9 import run
+    from legacy.extractors.main_mini_v9 import run
     context = get_current_context()
 
     # Airflow에게 어느 날짜의 데이터를 읽을지 문의
