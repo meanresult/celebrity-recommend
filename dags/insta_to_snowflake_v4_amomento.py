@@ -58,6 +58,7 @@ def extract_instagram_data(brand_id,brandname, debug: bool = True):
 
     df = pd.DataFrame(posts, columns=["post_id",
                                       "insta_id",
+                                      "insta_name",
                                       "brand_name", 
                                       "brand_id", 
                                       "full_link", 
@@ -100,6 +101,7 @@ def load_to_snowflake(filename, schema, table):
             CREATE TEMPORARY TABLE {staging_table}(
                 post_id STRING ,
                 insta_id STRING,
+                insta_name STRING,
                 brand_name STRING,
                 brand_id STRING,
                 full_link STRING,
@@ -148,15 +150,17 @@ def load_to_snowflake(filename, schema, table):
             on target.post_id = stage.post_id
             WHEN MATCHED THEN
                 UPDATE SET
+                insta_id = stage.insta_id,
+                insta_name = stage.insta_name,
                 last_seen_at = CURRENT_TIMESTAMP(),
                 active       = TRUE,
                 tagged_insta_id = stage.tagged_insta_id,
                 tagged_insta_id_cnt = stage.tagged_insta_id_cnt
 
             WHEN NOT MATCHED THEN
-                INSERT (post_id, insta_id, brand_name, brand_id, full_link,img_src,post_date,
+                INSERT (post_id, insta_id, insta_name, brand_name, brand_id, full_link,img_src,post_date,
                         first_seen_at,last_seen_at,active,tagged_insta_id,tagged_insta_id_cnt)
-                VALUES (stage.post_id, stage.insta_id, stage.brand_name, stage.brand_id, stage.full_link, stage.img_src, 
+                VALUES (stage.post_id, stage.insta_id, stage.insta_name, stage.brand_name, stage.brand_id, stage.full_link, stage.img_src, 
                         stage.post_date, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP(), TRUE,stage.tagged_insta_id,stage.tagged_insta_id_cnt);
         """
 

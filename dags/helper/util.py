@@ -39,6 +39,7 @@ def populate_table_via_stage(cur, table, file_path):
         COPY INTO {table}(
             post_id,
             insta_id,
+            insta_name,
             brand_name,
             brand_id,
             full_link,
@@ -71,6 +72,7 @@ def populate_table_via_stage_v2(cur, table, file_path):
         COPY INTO {table}(
             post_id,
             insta_id,
+            insta_name,
             brand_name,
             brand_id,
             full_link,
@@ -108,6 +110,7 @@ def ensure_instagram_posts_table(cur, schema, table):
         CREATE TABLE IF NOT EXISTS {table} (
             post_id STRING primary key,
             insta_id STRING,
+            insta_name STRING,
             brand_name STRING,
             brand_id STRING,
             full_link STRING,
@@ -121,6 +124,7 @@ def ensure_instagram_posts_table(cur, schema, table):
         );
         """
     )
+    cur.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS insta_name STRING;")
 
 ##################################
 # 💌 4. get_next_day: 다음 날짜 가져오는 함수

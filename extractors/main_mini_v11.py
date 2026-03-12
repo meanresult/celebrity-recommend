@@ -16,10 +16,11 @@ load_dotenv()
 
 MENTION_RE = re.compile(r"@[\w\.]+")
 POST_URL_RE = re.compile(r"/p/([^/?#]+)/?")
-OWNER_RE = re.compile(
-    r"@?([A-Za-z0-9._]+)\s+(?:on Instagram|shared a post|posted on Instagram)",
+OWNER_DESC_RE = re.compile(
+    r"^\s*([A-Za-z0-9._]+)\s+on\s+[A-Z][a-z]+\s+\d{1,2},\s+\d{4}",
     re.IGNORECASE,
 )
+DISPLAY_NAME_RE = re.compile(r"^(.*?)\s+on Instagram:", re.IGNORECASE)
 DETAIL_READY_SCRIPT = """
 () => Boolean(
     document.querySelector("time") ||
@@ -156,6 +157,15 @@ def extract_post_data(page, href):
         () => document.querySelector('meta[property="og:title"]')?.getAttribute("content") || ""
         """
     )
+    meta_desc = page.evaluate(
+        """
+        () => (
+            document.querySelector('meta[property="og:description"]')?.getAttribute("content") ||
+            document.querySelector('meta[name="description"]')?.getAttribute("content") ||
+            ""
+        )
+        """
+    )
     src = page.evaluate(
         """
         () => document.querySelector('meta[property="og:image"]')?.getAttribute("content") || ""
@@ -192,12 +202,43 @@ def extract_post_data(page, href):
 
     full_link = f"https://www.instagram.com{href}" if href else ""
     post_match = POST_URL_RE.search(full_link)
-    owner_match = OWNER_RE.search(meta_title)
 
     post_id = post_match.group(1) if post_match else "unknown"
-    insta_id = owner_match.group(1).lower() if owner_match else "unknown"
+    insta_id = extract_insta_id(href, meta_desc)
+    insta_name = extract_insta_name(meta_title, insta_id)
 
-    return post_id, insta_id, full_link, src, insta_tag, tags_cnt
+    return post_id, insta_id, insta_name, full_link, src, insta_tag, tags_cnt
+
+
+def extract_insta_id(href, meta_desc):
+    path_parts = [part for part in href.split("/") if part] if href else []
+    if len(path_parts) >= 3 and path_parts[1] == "p":
+        return path_parts[0].lower()
+
+    owner_match = OWNER_DESC_RE.search(meta_desc or "")
+    if owner_match:
+        return owner_match.group(1).lower()
+
+    return "unknown"
+
+
+def extract_insta_name(meta_title, insta_id):
+    title = (meta_title or "").strip()
+    if not title:
+        return "unknown"
+
+    display_name_match = DISPLAY_NAME_RE.search(title)
+    if not display_name_match:
+        return "unknown"
+
+    display_name = display_name_match.group(1).strip().strip('"').strip()
+    if not display_name:
+        return "unknown"
+
+    if insta_id != "unknown" and display_name.lower() == insta_id.lower():
+        return "unknown"
+
+    return display_name
 
 
 def snapshot_post_urls(page):
@@ -312,13 +353,14 @@ def collect_posts_with_scroll(
                 past_date_streak = 0
 
                 if target_day is None or post_date == target_day:
-                    post_id, insta_id, full_link, src, insta_tag, tags_cnt = extract_post_data(
+                    post_id, insta_id, insta_name, full_link, src, insta_tag, tags_cnt = extract_post_data(
                         detail_page, url
                     )
                     posts.append(
                         (
                             post_id,
                             insta_id,
+                            insta_name,
                             brand_name,
                             brand_id,
                             full_link,
