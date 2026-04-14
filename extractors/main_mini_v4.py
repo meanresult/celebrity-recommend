@@ -47,6 +47,31 @@ def goto_tagged(page):
     page.wait_for_selector("a[href*='/p/']", timeout=10000)
 
 
+def calculate_days_diff(dt_str: str, now_kst: datetime = None) -> tuple:
+    """순수 함수 — ISO datetime 문자열 → (post_dt_kst, post_date, days_diff)
+
+    브라우저 없이 단독 테스트 가능하도록 page 의존성 분리.
+    now_kst를 주입받으면 테스트 시 고정된 기준 시각 사용 가능.
+    """
+    post_dt_utc = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+    post_dt_kst = post_dt_utc.astimezone(KST)
+
+    if now_kst is None:
+        now_kst = datetime.now(KST)
+
+    days_diff = (now_kst.date() - post_dt_kst.date()).days
+    return post_dt_kst, post_dt_kst.date(), days_diff
+
+
+def parse_href(href: str) -> tuple:
+    """순수 함수 — href → (insta_id, full_link)"""
+    if not href:
+        return "unknown", ""
+    insta_id = href.strip("/").split("/p/")[0]
+    full_link = "https://www.instagram.com" + href
+    return insta_id, full_link
+
+
 def parse_post_date_kst(page):
     """상세 화면(게시물)에서 datetime 읽어서 KST datetime + date + days_diff 반환"""
     page.wait_for_selector("time", state="visible", timeout=5000)
@@ -56,24 +81,15 @@ def parse_post_date_kst(page):
     if not dt_str:
         return None, None, None
 
-    post_dt_utc = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
-    post_dt_kst = post_dt_utc.astimezone(KST)
-
-    now_kst = datetime.now(KST)
-    days_diff = (now_kst.date() - post_dt_kst.date()).days  # 날짜 기준
-
-    return post_dt_kst, post_dt_kst.date(), days_diff
+    return calculate_days_diff(dt_str)
 
 
 def extract_post_data(page, href):
     """상세 화면에서 이미지(src) 등 필요한 정보 추출 (필요시 확장)"""
-    # 상세 화면에서 대표 이미지 찾기(상황에 따라 selector가 달라질 수 있음)
     img = page.locator("article img").first
     src = img.get_attribute("src") if img else None
 
-    insta_id = href.strip("/").split("/p/")[0] if href else "unknown"
-    full_link = "https://www.instagram.com" + href
-
+    insta_id, full_link = parse_href(href)
     return insta_id, full_link, src
 
 
