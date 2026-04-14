@@ -1,5 +1,9 @@
 # "그 컴퓨터에 어떤 프로그램을 설치할지"
 
+# test
+pytest
+pytest-cov
+
 requests
 beautifulsoup4
 lxml

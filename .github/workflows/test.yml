@@ -1,0 +1,37 @@
+name: Test
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install pytest pytest-cov
+          pip install python-dotenv openpyxl
+          # DAG 테스트용 (test_dag.py)
+          pip install apache-airflow==2.9.0 --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-2.9.0/constraints-3.11.txt"
+
+      - name: Run unit tests (브라우저 불필요)
+        run: |
+          pytest tests/test_date_logic.py tests/test_extractor.py \
+            -v --cov=extractors --cov-report=term-missing
+
+      - name: Run DAG structure tests
+        run: |
+          pytest tests/test_dag.py -v
+        # DAG import 오류가 있어도 CI 전체를 막지 않으려면 continue-on-error: true
+        continue-on-error: false
