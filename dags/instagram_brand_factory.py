@@ -10,10 +10,10 @@ from airflow.decorators import task
 from airflow.models import Variable
 from airflow.operators.python import get_current_context
 
-from helper import util
+from utils import db as util
 
 
-CONFIG_PATH = Path(__file__).resolve().parents[1] / "configs" / "instagram_brands.yaml"
+CONFIG_PATH = Path(__file__).resolve().parents[1] / "configs" / "brands.yaml"
 POST_COLUMNS = [
     "post_id",
     "insta_id",
@@ -131,7 +131,7 @@ def create_instagram_brand_dag(config: BrandDagConfig) -> DAG | None:
         execution_timeout=timedelta(minutes=40),
     )
     def extract_instagram_data(debug: bool = True) -> str:
-        from extractors.main_mini_v11 import run
+        from extractors.instagram_scraper import run
 
         context = get_current_context()
         logical_date_kst = context["logical_date"].in_timezone("Asia/Seoul")
