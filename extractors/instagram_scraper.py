@@ -1,9 +1,15 @@
 """
-grid 페이지는 유지하고, 게시물 상세는 별도 detail page에서 읽는 방식의 extractor
-"""
+instagram_scraper.py
 
-from playwright.sync_api import sync_playwright
-from dotenv import load_dotenv
+Playwright로 Instagram 브랜드 태그 페이지를 스크롤하며
+게시물 데이터를 수집합니다.
+
+동작 흐름:
+  1. 저장된 세션(storage_state.json)으로 로그인 상태 복원
+  2. /{brand_id}/tagged/ 페이지로 이동
+  3. 스크롤하며 게시물 URL 수집 → 상세 페이지에서 날짜·태그·이미지 파싱
+  4. target_day와 일치하는 게시물만 반환
+"""
 
 import os
 import re
@@ -11,16 +17,23 @@ import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
+from dotenv import load_dotenv
+from playwright.sync_api import sync_playwright
+
 
 load_dotenv()
 
-MENTION_RE = re.compile(r"@[\w\.]+")
-POST_URL_RE = re.compile(r"/p/([^/?#]+)/?")
-OWNER_DESC_RE = re.compile(
+# ── 정규식 패턴 ──────────────────────────────────────────────────
+
+MENTION_RE      = re.compile(r"@[\w\.]+")
+POST_URL_RE     = re.compile(r"/p/([^/?#]+)/?")
+OWNER_DESC_RE   = re.compile(
     r"^\s*([A-Za-z0-9._]+)\s+on\s+[A-Z][a-z]+\s+\d{1,2},\s+\d{4}",
     re.IGNORECASE,
 )
 DISPLAY_NAME_RE = re.compile(r"^(.*?)\s+on Instagram:", re.IGNORECASE)
+
+# 상세 페이지가 로드됐다고 볼 수 있는 조건 (시간 요소, og 메타 중 하나라도 있으면 OK)
 DETAIL_READY_SCRIPT = """
 () => Boolean(
     document.querySelector("time") ||
@@ -30,17 +43,21 @@ DETAIL_READY_SCRIPT = """
 """
 
 
+# ── 로그인 관련 ──────────────────────────────────────────────────
+
 def assert_logged_in(page):
-    cookies = page.context.cookies()
+    """sessionid 쿠키가 없으면 에러를 발생시킵니다."""
+    cookies      = page.context.cookies()
     cookie_names = {cookie["name"] for cookie in cookies}
 
     if "sessionid" not in cookie_names:
         raise RuntimeError(
-            f"로그인 세션(sessionid) 없음. 현재 URL={page.url}, cookies={sorted(cookie_names)}"
+            f"로그인 세션(sessionid) 없음. URL={page.url}, cookies={sorted(cookie_names)}"
         )
 
 
 def wait_for_sessionid(page, timeout=20):
+    """sessionid 쿠키가 생길 때까지 최대 timeout초 기다립니다."""
     deadline = time.time() + timeout
 
     while time.time() < deadline:
@@ -53,6 +70,7 @@ def wait_for_sessionid(page, timeout=20):
 
 
 def dismiss_common_dialogs(page):
+    """'나중에 하기' 등 팝업이 뜨면 닫아줍니다."""
     for label in ("나중에 하기", "Not Now"):
         for _ in range(3):
             try:
@@ -63,11 +81,12 @@ def dismiss_common_dialogs(page):
 
 
 def ensure_logged_in(page, login_url, username, password):
+    """홈에 접근했을 때 로그인 페이지로 튕기면 다시 로그인합니다."""
     page.goto("https://www.instagram.com/", wait_until="domcontentloaded")
     page.wait_for_timeout(1000)
 
     if "/accounts/login" in page.url:
-        print("🔁 홈 접근이 로그인으로 리다이렉트 → login() 수행")
+        print("홈 접근이 로그인으로 리다이렉트 → 로그인 수행")
         login(page, login_url, username, password)
         return
 
@@ -76,6 +95,7 @@ def ensure_logged_in(page, login_url, username, password):
 
 
 def login(page, login_url, username, password):
+    """Instagram 로그인 폼에 계정 정보를 입력하고 로그인합니다."""
     page.goto(login_url, wait_until="domcontentloaded")
 
     page.wait_for_selector("input[name='username'], input[name='email']")
@@ -98,12 +118,14 @@ def login(page, login_url, username, password):
     print("✅ 로그인 성공:", page.url)
 
     if not wait_for_sessionid(page, timeout=20):
-        cookies = page.context.cookies()
-        cookie_names = sorted({cookie["name"] for cookie in cookies})
+        cookie_names = sorted({c["name"] for c in page.context.cookies()})
         raise RuntimeError(f"sessionid 발급 실패. url={page.url}, cookies={cookie_names}")
 
 
+# ── 페이지 이동 ──────────────────────────────────────────────────
+
 def goto_tagged(page, brand_id):
+    """브랜드의 tagged 페이지로 이동하고 게시물 링크가 보일 때까지 기다립니다."""
     tagged_url = f"https://www.instagram.com/{brand_id}/tagged/"
     page.goto(tagged_url, wait_until="domcontentloaded")
     page.wait_for_load_state("domcontentloaded")
@@ -116,167 +138,8 @@ def goto_tagged(page, brand_id):
     page.wait_for_selector("a[href*='/p/']", timeout=10000)
 
 
-def parse_post_date_kst(page, kst):
-    try:
-        page.wait_for_selector("time", state="visible", timeout=8000)
-        time_el = page.locator("time").first
-        dt_str = time_el.get_attribute("datetime")
-
-        if dt_str:
-            post_dt_utc = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
-            post_dt_kst = post_dt_utc.astimezone(kst)
-            post_date_str = post_dt_kst.strftime("%Y-%m-%d")
-            print(f"포스팅 날짜 문자열: {post_date_str}")
-            return post_date_str
-    except Exception:
-        pass
-
-    meta_desc = page.evaluate(
-        """
-        () => (
-            document.querySelector('meta[property="og:description"]')?.getAttribute("content") ||
-            document.querySelector('meta[name="description"]')?.getAttribute("content") ||
-            ""
-        )
-        """
-    )
-
-    match = re.search(r"([A-Z][a-z]+ \d{1,2}, \d{4})", meta_desc)
-    if not match:
-        return None
-
-    post_dt = datetime.strptime(match.group(1), "%B %d, %Y").replace(tzinfo=kst)
-    post_date_str = post_dt.strftime("%Y-%m-%d")
-    print(f"포스팅 날짜 문자열: {post_date_str}")
-    return post_date_str
-
-
-def extract_post_data(page, href):
-    meta_title = page.evaluate(
-        """
-        () => document.querySelector('meta[property="og:title"]')?.getAttribute("content") || ""
-        """
-    )
-    meta_desc = page.evaluate(
-        """
-        () => (
-            document.querySelector('meta[property="og:description"]')?.getAttribute("content") ||
-            document.querySelector('meta[name="description"]')?.getAttribute("content") ||
-            ""
-        )
-        """
-    )
-    src = page.evaluate(
-        """
-        () => document.querySelector('meta[property="og:image"]')?.getAttribute("content") || ""
-        """
-    )
-
-    image_candidates = page.evaluate(
-        """
-        () => Array.from(document.querySelectorAll("main img"))
-            .map((img) => ({
-                alt: img.getAttribute("alt") || "",
-                src: img.getAttribute("src") || ""
-            }))
-            .filter((item) =>
-                item.alt.startsWith("Photo by ") || item.alt.startsWith("Photo shared by ")
-            )
-        """
-    )
-
-    tags = []
-    for item in image_candidates:
-        alt = item["alt"]
-        found = MENTION_RE.findall(alt)
-        cleaned = [tag.rstrip(".,!?:;") for tag in found]
-        tags.extend(cleaned)
-
-        if not src and item["src"]:
-            src = item["src"]
-
-    seen = set()
-    tags = [tag for tag in tags if not (tag in seen or seen.add(tag))]
-    tags_cnt = len(tags)
-    insta_tag = ",".join(tags) if tags else ""
-
-    full_link = f"https://www.instagram.com{href}" if href else ""
-    post_match = POST_URL_RE.search(full_link)
-
-    post_id = post_match.group(1) if post_match else "unknown"
-    insta_id = extract_insta_id(href, meta_desc)
-    insta_name = extract_insta_name(meta_title, insta_id)
-
-    return post_id, insta_id, insta_name, full_link, src, insta_tag, tags_cnt
-
-
-def extract_insta_id(href, meta_desc):
-    path_parts = [part for part in href.split("/") if part] if href else []
-    if len(path_parts) >= 3 and path_parts[1] == "p":
-        return path_parts[0].lower()
-
-    owner_match = OWNER_DESC_RE.search(meta_desc or "")
-    if owner_match:
-        return owner_match.group(1).lower()
-
-    return "unknown"
-
-
-def extract_insta_name(meta_title, insta_id):
-    title = (meta_title or "").strip()
-    if not title:
-        return "unknown"
-
-    display_name_match = DISPLAY_NAME_RE.search(title)
-    if not display_name_match:
-        return "unknown"
-
-    display_name = display_name_match.group(1).strip().strip('"').strip()
-    if not display_name:
-        return "unknown"
-
-    if insta_id != "unknown" and display_name.lower() == insta_id.lower():
-        return "unknown"
-
-    return display_name
-
-
-def snapshot_post_urls(page):
-    hrefs = page.eval_on_selector_all(
-        "a[href*='/p/']",
-        "elements => elements.map(el => el.getAttribute('href'))",
-    )
-
-    seen = set()
-    full_hrefs = []
-
-    for href in hrefs:
-        href = href.split("?")[0]
-        if "/c/" in href:
-            continue
-
-        if href not in seen:
-            seen.add(href)
-            full_hrefs.append(href)
-
-    return full_hrefs
-
-
-def save_debug_artifact(page, url, reason, debug_dir="/tmp/insta_debug"):
-    Path(debug_dir).mkdir(parents=True, exist_ok=True)
-    post_code = url.strip("/").split("/")[-1] if url else "unknown"
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    screenshot_path = os.path.join(debug_dir, f"{reason}_{post_code}_{timestamp}.png")
-
-    try:
-        page.screenshot(path=screenshot_path, full_page=True)
-        return screenshot_path
-    except Exception as exc:
-        print(f"⚠️ 스크린샷 저장 실패: {exc}")
-        return None
-
-
 def open_post_detail_page(detail_page, url):
+    """상세 페이지로 이동하고 og 메타 또는 time 태그가 로드될 때까지 기다립니다."""
     detail_url = f"https://www.instagram.com{url}"
     detail_page.goto(detail_url, wait_until="domcontentloaded")
     detail_page.wait_for_load_state("domcontentloaded")
@@ -289,6 +152,176 @@ def open_post_detail_page(detail_page, url):
     return detail_page.url
 
 
+# ── 데이터 파싱 ──────────────────────────────────────────────────
+
+def parse_post_date_kst(page, kst):
+    """
+    상세 페이지에서 게시물 날짜를 KST 기준 'YYYY-MM-DD' 문자열로 추출합니다.
+    1순위: <time datetime="..."> 태그
+    2순위: og:description 메타의 날짜 텍스트
+    """
+    # 1순위: time 태그
+    try:
+        page.wait_for_selector("time", state="visible", timeout=8000)
+        dt_str = page.locator("time").first.get_attribute("datetime")
+
+        if dt_str:
+            post_dt_utc = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+            post_date_str = post_dt_utc.astimezone(kst).strftime("%Y-%m-%d")
+            print(f"게시물 날짜: {post_date_str}")
+            return post_date_str
+    except Exception:
+        pass
+
+    # 2순위: og:description 메타 텍스트에서 날짜 추출
+    meta_desc = page.evaluate(
+        """
+        () => (
+            document.querySelector('meta[property="og:description"]')?.getAttribute("content") ||
+            document.querySelector('meta[name="description"]')?.getAttribute("content") ||
+            ""
+        )
+        """
+    )
+    match = re.search(r"([A-Z][a-z]+ \d{1,2}, \d{4})", meta_desc)
+    if not match:
+        return None
+
+    post_date_str = (
+        datetime.strptime(match.group(1), "%B %d, %Y")
+        .replace(tzinfo=kst)
+        .strftime("%Y-%m-%d")
+    )
+    print(f"게시물 날짜(메타 폴백): {post_date_str}")
+    return post_date_str
+
+
+def extract_insta_id(href, meta_desc):
+    """URL 경로 또는 og:description에서 계정 ID를 추출합니다."""
+    path_parts = [part for part in href.split("/") if part] if href else []
+    if len(path_parts) >= 3 and path_parts[1] == "p":
+        return path_parts[0].lower()
+
+    owner_match = OWNER_DESC_RE.search(meta_desc or "")
+    if owner_match:
+        return owner_match.group(1).lower()
+
+    return "unknown"
+
+
+def extract_insta_name(meta_title, insta_id):
+    """og:title에서 계정 표시 이름을 추출합니다. 추출 실패 시 'unknown'을 반환합니다."""
+    title = (meta_title or "").strip()
+    if not title:
+        return "unknown"
+
+    match = DISPLAY_NAME_RE.search(title)
+    if not match:
+        return "unknown"
+
+    display_name = match.group(1).strip().strip('"').strip()
+    if not display_name:
+        return "unknown"
+
+    # 표시 이름이 계정 ID와 동일하면 의미없는 값이므로 unknown 처리
+    if insta_id != "unknown" and display_name.lower() == insta_id.lower():
+        return "unknown"
+
+    return display_name
+
+
+def extract_post_data(page, href):
+    """
+    상세 페이지의 메타 태그와 이미지 alt에서 게시물 데이터를 추출합니다.
+    반환: (post_id, insta_id, insta_name, full_link, img_src, tagged_ids, tags_cnt)
+    """
+    meta_title = page.evaluate(
+        "() => document.querySelector('meta[property=\"og:title\"]')?.getAttribute('content') || ''"
+    )
+    meta_desc = page.evaluate(
+        """
+        () => (
+            document.querySelector('meta[property="og:description"]')?.getAttribute("content") ||
+            document.querySelector('meta[name="description"]')?.getAttribute("content") ||
+            ""
+        )
+        """
+    )
+    src = page.evaluate(
+        "() => document.querySelector('meta[property=\"og:image\"]')?.getAttribute('content') || ''"
+    )
+
+    # 이미지 alt 텍스트에서 @멘션 태그 추출
+    image_candidates = page.evaluate(
+        """
+        () => Array.from(document.querySelectorAll("main img"))
+            .map((img) => ({ alt: img.getAttribute("alt") || "", src: img.getAttribute("src") || "" }))
+            .filter((item) => item.alt.startsWith("Photo by ") || item.alt.startsWith("Photo shared by "))
+        """
+    )
+
+    tags = []
+    for item in image_candidates:
+        found   = MENTION_RE.findall(item["alt"])
+        cleaned = [tag.rstrip(".,!?:;") for tag in found]
+        tags.extend(cleaned)
+
+        if not src and item["src"]:
+            src = item["src"]
+
+    # 중복 태그 제거 (순서 유지)
+    seen = set()
+    tags = [tag for tag in tags if not (tag in seen or seen.add(tag))]
+
+    full_link  = f"https://www.instagram.com{href}" if href else ""
+    post_match = POST_URL_RE.search(full_link)
+    post_id    = post_match.group(1) if post_match else "unknown"
+    insta_id   = extract_insta_id(href, meta_desc)
+    insta_name = extract_insta_name(meta_title, insta_id)
+
+    return post_id, insta_id, insta_name, full_link, src, ",".join(tags), len(tags)
+
+
+def snapshot_post_urls(page):
+    """현재 화면에 보이는 게시물 URL을 중복 없이 반환합니다."""
+    hrefs = page.eval_on_selector_all(
+        "a[href*='/p/']",
+        "elements => elements.map(el => el.getAttribute('href'))",
+    )
+
+    seen       = set()
+    full_hrefs = []
+
+    for href in hrefs:
+        href = href.split("?")[0]
+        if "/c/" in href:  # 댓글 링크 제외
+            continue
+        if href not in seen:
+            seen.add(href)
+            full_hrefs.append(href)
+
+    return full_hrefs
+
+
+# ── 디버그 ───────────────────────────────────────────────────────
+
+def save_debug_artifact(page, url, reason, debug_dir="/tmp/insta_debug"):
+    """실패한 게시물의 스크린샷을 저장합니다."""
+    Path(debug_dir).mkdir(parents=True, exist_ok=True)
+    post_code       = url.strip("/").split("/")[-1] if url else "unknown"
+    timestamp       = datetime.now().strftime("%Y%m%d_%H%M%S")
+    screenshot_path = os.path.join(debug_dir, f"{reason}_{post_code}_{timestamp}.png")
+
+    try:
+        page.screenshot(path=screenshot_path, full_page=True)
+        return screenshot_path
+    except Exception as exc:
+        print(f"⚠️ 스크린샷 저장 실패: {exc}")
+        return None
+
+
+# ── 핵심 수집 루프 ───────────────────────────────────────────────
+
 def collect_posts_with_scroll(
     grid_page,
     detail_page,
@@ -300,51 +333,60 @@ def collect_posts_with_scroll(
     kst,
     target_day,
 ):
-    posts = []
-    all_seen = set()
-    past_date_streak = 0
-    no_change_count = 0
-    scroll_count = 0
-    detail_fail_cnt = 0
-    parsed_fail_cnt = 0
-    stop_early = False
-    stop_reason = None
+    """
+    스크롤하며 게시물을 수집합니다.
+
+    종료 조건:
+      - max_scrolls 횟수 초과
+      - 새 게시물이 3번 연속 없을 때 (그리드 끝 도달)
+      - target_day보다 오래된 게시물이 5번 연속 나올 때 (날짜 범위 벗어남)
+    """
+    posts            = []
+    all_seen         = set()
+    past_date_streak = 0   # 연속 과거 게시물 카운트
+    no_change_count  = 0   # 새 게시물 없는 스크롤 횟수
+    scroll_count     = 0
+    detail_fail_cnt  = 0
+    parsed_fail_cnt  = 0
+    stop_early       = False
+    stop_reason      = None
 
     while scroll_count < max_scrolls and not stop_early:
-        urls = snapshot_post_urls(grid_page)
-        print(f"[스크롤 {scroll_count}] 스냅샷된 게시물: {len(urls)}개")
 
+        # ── 현재 화면의 게시물 URL 스냅샷 ──────────────────────────
+        urls         = snapshot_post_urls(grid_page)
+        new_urls     = [url for url in urls if url not in all_seen]
         before_count = len(all_seen)
-        new_urls = [url for url in urls if url not in all_seen]
-        print(f"새로운 게시물: {len(new_urls)}개")
 
+        print(f"[스크롤 {scroll_count}] 전체: {len(urls)}개 / 신규: {len(new_urls)}개")
+
+        # ── 신규 게시물 처리 ────────────────────────────────────────
         for url in new_urls:
             all_seen.add(url)
 
             try:
                 print(f"처리 중: {url}")
-                opened_url = open_post_detail_page(detail_page, url)
-                print(f"상세 페이지 열림: {opened_url}")
+                open_post_detail_page(detail_page, url)
 
                 post_date = parse_post_date_kst(detail_page, kst)
                 if post_date is None:
                     parsed_fail_cnt += 1
-                    screenshot_path = save_debug_artifact(detail_page, url, "date_parse_fail")
-                    print(f"⚠️ 날짜 추출 실패 → 스킵 {url}")
-                    print(f"현재 detail URL: {detail_page.url}")
+                    screenshot_path  = save_debug_artifact(detail_page, url, "date_parse_fail")
+                    print(f"⚠️ 날짜 추출 실패 → 스킵: {url}")
                     if screenshot_path:
-                        print(f"디버그 스크린샷: {screenshot_path}")
+                        print(f"   디버그 스크린샷: {screenshot_path}")
                     continue
 
                 print(f"목표: {target_day} | 실제: {post_date}")
 
+                # target_day보다 오래된 게시물 연속 감지
                 if target_day is not None and post_date < target_day:
                     past_date_streak += 1
                     print(f"📌 {past_date_streak}번째 연속 과거 게시물")
 
                     if past_date_streak >= 5:
-                        print("✅ 5번 연속 과거 게시물 → 수집 종료(조기 종료 플래그)")
-                        stop_early = True
+                        print("5번 연속 과거 게시물 → 수집 종료")
+                        stop_early  = True
                         stop_reason = "past_date_streak>=5"
                         break
 
@@ -352,41 +394,31 @@ def collect_posts_with_scroll(
 
                 past_date_streak = 0
 
+                # target_day와 일치하는 게시물만 수집
                 if target_day is None or post_date == target_day:
-                    post_id, insta_id, insta_name, full_link, src, insta_tag, tags_cnt = extract_post_data(
-                        detail_page, url
+                    post_id, insta_id, insta_name, full_link, src, insta_tag, tags_cnt = (
+                        extract_post_data(detail_page, url)
                     )
-                    posts.append(
-                        (
-                            post_id,
-                            insta_id,
-                            insta_name,
-                            brand_name,
-                            brand_id,
-                            full_link,
-                            src,
-                            post_date,
-                            insta_tag,
-                            tags_cnt,
-                        )
-                    )
+                    posts.append((
+                        post_id, insta_id, insta_name,
+                        brand_name, brand_id,
+                        full_link, src, post_date,
+                        insta_tag, tags_cnt,
+                    ))
                     print(f"✅ 수집 완료 ({len(posts)}개): {full_link}")
 
             except Exception as exc:
                 detail_fail_cnt += 1
-                screenshot_path = save_debug_artifact(detail_page, url, "detail_open_fail")
-                print(f"❌ 상세 페이지 처리 실패: {url} - {exc}")
-                print(f"현재 detail URL: {detail_page.url}")
+                screenshot_path  = save_debug_artifact(detail_page, url, "detail_open_fail")
+                print(f"❌ 상세 페이지 처리 실패: {url} — {exc}")
                 if screenshot_path:
-                    print(f"디버그 스크린샷: {screenshot_path}")
-                continue
+                    print(f"   디버그 스크린샷: {screenshot_path}")
 
         if stop_early:
             break
 
-        after_count = len(all_seen)
-        new_count = after_count - before_count
-
+        # ── 스크롤 종료 조건 체크 ────────────────────────────────────
+        new_count = len(all_seen) - before_count
         if new_count == 0:
             no_change_count += 1
             print(f"⚠️ 새 게시물 없음 ({no_change_count}/3)")
@@ -394,20 +426,26 @@ def collect_posts_with_scroll(
             no_change_count = 0
 
         if no_change_count >= 3:
-            print("✅ 3번 연속 새 게시물 없음 → 종료")
+            print("3번 연속 새 게시물 없음 → 그리드 끝 도달, 종료")
             break
 
-        print(f"스크롤 진행 중... (누적: {after_count}개, 수집: {len(posts)}개)")
+        # ── 다음 스크롤 ─────────────────────────────────────────────
+        print(f"스크롤 진행 중... (누적: {len(all_seen)}개 | 수집: {len(posts)}개)")
         grid_page.mouse.wheel(0, scroll_y)
         grid_page.wait_for_timeout(wait_ms)
         scroll_count += 1
 
-    print(f"📊 최종 수집: {len(posts)}개 게시물")
-    print(f"상세 페이지 처리 실패 건 수: {detail_fail_cnt}개")
-    print(f"날짜 수집 실패 횟수: {parsed_fail_cnt}개")
-    print(f"종료 사유: {stop_reason}")
+    print(
+        f"\n[수집 완료]"
+        f"\n  게시물  : {len(posts)}개"
+        f"\n  상세 실패: {detail_fail_cnt}건"
+        f"\n  날짜 실패: {parsed_fail_cnt}건"
+        f"\n  종료 사유: {stop_reason}"
+    )
     return posts
 
+
+# ── 진입점 ───────────────────────────────────────────────────────
 
 def run(
     state_path="/opt/airflow/secrets/storage_state.json",
@@ -422,14 +460,22 @@ def run(
     headless=True,
     target_day=None,
 ):
+    """
+    브랜드 태그 페이지에서 게시물을 수집해 리스트로 반환합니다.
+
+    Args:
+        state_path  : Playwright 세션 파일 경로
+        brand_id    : Instagram 계정 ID (예: "adidas")
+        brand_name  : 브랜드 키 (예: "adidas") — DB 저장용
+        target_day  : 수집 대상 날짜 'YYYY-MM-DD'. None이면 전체 수집
+        headless    : True면 브라우저 창 없이 실행
+    """
     kst = timezone(timedelta(hours=9))
-    username = username or os.getenv("ID")
-    password = password or os.getenv("PW")
 
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=headless)
-        context = browser.new_context(storage_state=state_path)
-        grid_page = context.new_page()
+        browser     = playwright.chromium.launch(headless=headless)
+        context     = browser.new_context(storage_state=state_path)
+        grid_page   = context.new_page()
 
         ensure_logged_in(grid_page, login_url, username, password)
         goto_tagged(grid_page, brand_id)
@@ -451,12 +497,12 @@ def run(
         grid_page.close()
         browser.close()
 
-    print("✅수집된 데이터 type 확인")
-    print(posts[0:1])
+    print("수집된 샘플:", posts[0:1])
     return posts
 
 
 def main():
+    """로컬 테스트용 진입점입니다."""
     run(
         state_path="/opt/airflow/secrets/storage_state.json",
         brand_name="amomento",

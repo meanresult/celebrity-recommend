@@ -16,6 +16,10 @@ from instagram_brand_factory import load_brand_configs
 
 
 def build_brand_etl_deps() -> list[tuple[str, str, tuple[int, int]]]:
+    """
+    활성화된 브랜드 DAG의 (dag_id, 마지막 task_id, UTC 스케줄) 목록을 반환합니다.
+    dbt DAG이 모든 브랜드 ETL의 완료를 기다릴 때 이 목록을 사용합니다.
+    """
     deps: list[tuple[str, str, tuple[int, int]]] = []
     for config in load_brand_configs().values():
         if not config.enabled:
@@ -30,6 +34,10 @@ DOCKER_NETWORK = "insta_pipeline_default"
 
 
 def build_transform_schedule() -> str:
+    """
+    모든 브랜드 ETL 중 가장 늦은 스케줄 + 30분 뒤를 dbt 실행 시각으로 결정합니다.
+    (마지막 브랜드 수집이 끝난 직후 변환을 실행하기 위함)
+    """
     latest_hour = 0
     latest_minute = 0
     for config in load_brand_configs().values():
@@ -54,6 +62,11 @@ default_args = {
 
 
 def match_utc_time(hour: int, minute: int):
+    """
+    ExternalTaskSensor에 넘기는 execution_date_fn 생성기입니다.
+    "오늘 HH:MM에 실행된 브랜드 DAG"을 가리키도록 날짜를 맞춰줍니다.
+    아직 그 시각이 안 됐으면 전날 같은 시각으로 되돌립니다.
+    """
     def _fn(logical_date, **_):
         target = logical_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
         if logical_date < target:
@@ -86,7 +99,7 @@ with DAG(
     schedule=TRANSFORM_SCHEDULE,
     catchup=False,
     default_args=default_args,
-    tags=["transform", "dbt", "snowflake", "orchestration"],
+    tags=["transform", "dbt", "duckdb", "orchestration"],
 ) as dag:
     @task
     def start_marker():
@@ -110,10 +123,15 @@ with DAG(
 
     @task.branch(task_id="gate_for_manual")
     def gate_for_manual():
+        """
+        수동 실행(manual trigger)일 때는 모든 브랜드가 이미 성공 상태면
+        센서 대기를 건너뛰고 바로 dbt_run으로 분기합니다.
+        스케줄 실행이거나 아직 성공하지 않은 브랜드가 있으면 센서 대기로 이동합니다.
+        """
         from airflow.operators.python import get_current_context
 
-        context = get_current_context()
-        run_id = context["dag_run"].run_id
+        context   = get_current_context()
+        run_id    = context["dag_run"].run_id
         is_manual = run_id.startswith("manual__")
 
         if not is_manual:
