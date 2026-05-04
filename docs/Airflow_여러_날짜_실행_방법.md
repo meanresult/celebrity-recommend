@@ -18,7 +18,7 @@
 
 ## 1. 먼저 알아둘 것
 
-이 프로젝트의 v4 DAG는 한국 시간(KST) 기준 날짜를 수집하도록 설정되어 있습니다.
+이 프로젝트의 v5 DAG는 `configs/instagram_brands.yaml` 기준으로 한국 시간(KST) 날짜를 수집하도록 설정되어 있습니다.
 
 하지만 Airflow 내부 `logical_date`는 UTC로 들어갑니다.
 

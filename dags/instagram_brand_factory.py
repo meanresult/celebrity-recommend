@@ -163,132 +163,113 @@ def create_instagram_brand_dag(config: BrandDagConfig) -> DAG | None:
         )
         return file_path
 
-    @task(task_id="load_to_snowflake")
-    def load_to_snowflake(filename: str) -> None:
+    @task(task_id="load_to_duckdb")
+    def load_to_duckdb(filename: str) -> None:
         staging_table = f"temp_{config.table}"
-        cur = util.return_snowflake_conn("snowflake_conn")
+        qualified_table = f"{config.schema}.{config.table}"
+        conn = util.return_duckdb_conn()
 
         tmp_dir = Variable.get("data_dir", "/tmp/")
         file_path = util.get_file_path(tmp_dir, filename, get_current_context())
 
         try:
-            util.ensure_instagram_posts_table(cur, config.schema, config.table)
-            cur.execute("BEGIN;")
-            cur.execute(
+            util.ensure_instagram_posts_table(conn, config.schema, config.table)
+            conn.execute(
                 f"""
-                CREATE TEMPORARY TABLE {staging_table}(
-                    post_id STRING,
-                    insta_id STRING,
-                    insta_name STRING,
-                    brand_name STRING,
-                    brand_id STRING,
-                    full_link STRING,
-                    img_src STRING,
-                    post_date STRING,
-                    tagged_insta_id STRING,
-                    tagged_insta_id_cnt NUMBER
+                CREATE TEMP TABLE {staging_table}(
+                    post_id             VARCHAR,
+                    insta_id            VARCHAR,
+                    insta_name          VARCHAR,
+                    brand_name          VARCHAR,
+                    brand_id            VARCHAR,
+                    full_link           VARCHAR,
+                    img_src             VARCHAR,
+                    post_date           VARCHAR,
+                    tagged_insta_id     VARCHAR,
+                    tagged_insta_id_cnt INTEGER
                 );
                 """
             )
 
-            util.populate_table_via_stage_v2(cur, staging_table, file_path)
+            util.load_csv_to_table(conn, staging_table, file_path)
 
-            cur.execute(f"SELECT COUNT(*) FROM {staging_table}")
-            row_count = cur.fetchone()[0]
+            row_count = conn.execute(f"SELECT COUNT(*) FROM {staging_table}").fetchone()[0]
             if row_count == 0:
                 raise ValueError("스테이징에 적재된 데이터가 없습니다")
 
-            cur.execute(
+            duplicate_rows = conn.execute(
                 f"""
                 SELECT post_id, COUNT(*) AS cnt
                 FROM {staging_table}
                 GROUP BY post_id
                 HAVING COUNT(*) > 1;
                 """
-            )
-            duplicate_rows = cur.fetchall()
+            ).fetchall()
             if duplicate_rows:
                 sample = ", ".join([f"{row[0]}({row[1]})" for row in duplicate_rows[:5]])
                 raise ValueError(f"스테이징 post_id 중복 발견: {sample} ... (총 {len(duplicate_rows)}개)")
 
-            cur.execute(
+            invalid_post_id_count = conn.execute(
                 f"""
                 SELECT COUNT(*)
                 FROM {staging_table}
                 WHERE post_id IS NULL OR TRIM(post_id) = '';
                 """
-            )
-            invalid_post_id_count = cur.fetchone()[0]
+            ).fetchone()[0]
             if invalid_post_id_count > 0:
                 raise ValueError(
                     f"스테이징에 비어있는 post_id가 {invalid_post_id_count}건 존재합니다."
                 )
 
             upsert_sql = f"""
-                MERGE INTO {config.table} AS target
+                MERGE INTO {qualified_table} AS target
                 USING {staging_table} AS stage
                 ON target.post_id = stage.post_id
                 WHEN MATCHED THEN
                     UPDATE SET
-                        insta_id = stage.insta_id,
-                        insta_name = stage.insta_name,
-                        last_seen_at = CURRENT_TIMESTAMP(),
-                        active = TRUE,
-                        tagged_insta_id = stage.tagged_insta_id,
+                        insta_id            = stage.insta_id,
+                        insta_name          = stage.insta_name,
+                        last_seen_at        = CURRENT_TIMESTAMP,
+                        active              = TRUE,
+                        tagged_insta_id     = stage.tagged_insta_id,
                         tagged_insta_id_cnt = stage.tagged_insta_id_cnt
                 WHEN NOT MATCHED THEN
                     INSERT (
-                        post_id,
-                        insta_id,
-                        insta_name,
-                        brand_name,
-                        brand_id,
-                        full_link,
-                        img_src,
-                        post_date,
-                        first_seen_at,
-                        last_seen_at,
-                        active,
-                        tagged_insta_id,
-                        tagged_insta_id_cnt
+                        post_id, insta_id, insta_name, brand_name, brand_id,
+                        full_link, img_src, post_date,
+                        first_seen_at, last_seen_at, active,
+                        tagged_insta_id, tagged_insta_id_cnt
                     )
                     VALUES (
-                        stage.post_id,
-                        stage.insta_id,
-                        stage.insta_name,
-                        stage.brand_name,
-                        stage.brand_id,
-                        stage.full_link,
-                        stage.img_src,
-                        stage.post_date,
-                        CURRENT_TIMESTAMP(),
-                        CURRENT_TIMESTAMP(),
-                        TRUE,
-                        stage.tagged_insta_id,
-                        stage.tagged_insta_id_cnt
+                        stage.post_id, stage.insta_id, stage.insta_name,
+                        stage.brand_name, stage.brand_id,
+                        stage.full_link, stage.img_src, stage.post_date,
+                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, TRUE,
+                        stage.tagged_insta_id, stage.tagged_insta_id_cnt
                     );
             """
             print("==== UPSERT SQL ====")
             print(upsert_sql)
             print("====================")
-            cur.execute(upsert_sql)
-            cur.execute("COMMIT;")
-            print(f"스노우플레이크 적재완료: {staging_table},{file_path}")
+            conn.execute("BEGIN;")
+            conn.execute(upsert_sql)
+            conn.execute("COMMIT;")
+            print(f"DuckDB 적재완료: {qualified_table}, {file_path}")
         except Exception as exc:
-            cur.execute("ROLLBACK;")
+            conn.execute("ROLLBACK;")
             print(f"Error loading data: {exc}")
             raise exc
         finally:
-            cur.close()
+            conn.close()
 
     with DAG(
         dag_id=config.dag_id,
-        description=f"Instagram to Snowflake ETL DAG ({config.brand_key})",
+        description=f"Instagram to DuckDB ETL DAG ({config.brand_key})",
         start_date=datetime(2026, 1, 8),
         catchup=False,
-        tags=["ETL", "Instagram", "Snowflake", "incremental", "factory"],
+        tags=["ETL", "Instagram", "DuckDB", "incremental", "factory"],
         schedule=config.schedule,
     ) as dag:
-        print_run_date() >> extract_instagram_data(debug=True) >> load_to_snowflake(config.brand_key)
+        print_run_date() >> extract_instagram_data(debug=True) >> load_to_duckdb(config.brand_key)
 
     return dag

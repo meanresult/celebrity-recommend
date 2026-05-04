@@ -20,7 +20,7 @@ def build_brand_etl_deps() -> list[tuple[str, str, tuple[int, int]]]:
     for config in load_brand_configs().values():
         if not config.enabled:
             continue
-        deps.append((config.dag_id, "load_to_snowflake", config.utc_schedule))
+        deps.append((config.dag_id, "load_to_duckdb", config.utc_schedule))
     return deps
 
 
@@ -74,14 +74,8 @@ def _latest_dagrun_state(dag_id: str, session=None) -> str | None:
     return dag_run.state if dag_run else None
 
 
-SNOWFLAKE_ENV = {
-    "SNOWFLAKE_ACCOUNT": os.getenv("SNOWFLAKE_ACCOUNT"),
-    "SNOWFLAKE_USER": os.getenv("SNOWFLAKE_USER"),
-    "SNOWFLAKE_PASSWORD": os.getenv("SNOWFLAKE_PASSWORD"),
-    "SNOWFLAKE_ROLE": os.getenv("SNOWFLAKE_ROLE"),
-    "SNOWFLAKE_WAREHOUSE": os.getenv("SNOWFLAKE_WAREHOUSE"),
-    "SNOWFLAKE_DATABASE": os.getenv("SNOWFLAKE_DATABASE"),
-    "SNOWFLAKE_SCHEMA": os.getenv("SNOWFLAKE_SCHEMA"),
+DUCKDB_ENV = {
+    "DUCKDB_PATH": os.getenv("DUCKDB_PATH", "/data/insta_pipeline.duckdb"),
 }
 
 
@@ -148,7 +142,7 @@ with DAG(
             Mount(source=f"{host_project_root}/.dbt", target="/root/.dbt", type="bind"),
         ],
         working_dir="/usr/app",
-        environment=SNOWFLAKE_ENV,
+        environment=DUCKDB_ENV,
     )
 
     dbt_test = DockerOperator(
@@ -165,7 +159,7 @@ with DAG(
             Mount(source=f"{host_project_root}/.dbt", target="/root/.dbt", type="bind"),
         ],
         working_dir="/usr/app",
-        environment=SNOWFLAKE_ENV,
+        environment=DUCKDB_ENV,
     )
 
     start = EmptyOperator(task_id="start")

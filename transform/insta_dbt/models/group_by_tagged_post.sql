@@ -9,12 +9,11 @@ with base as (
         ,post_date
         ,tagged_insta_id
         ,tagged_insta_id_cnt
-    
+
     from {{ source('instagram_raw', 'instagram_posts') }}
     where tagged_insta_id is not null
       and trim(tagged_insta_id) <> ''
 ),
--- 쉼표 기준으로 나누기 
 split as (
     select
         post_id
@@ -24,7 +23,7 @@ split as (
         ,brand_id
         ,post_date
         ,tagged_insta_id_cnt
-        ,split(tagged_insta_id, ',') as tag_arr
+        ,string_split(tagged_insta_id, ',') as tag_arr
     from base
 ),
 
@@ -36,10 +35,10 @@ flattened as (
         ,brand_name
         ,brand_id
         ,post_date
-        ,f.index + 1 as tag_pos
-        ,trim(f.value::string) as tagged_account_raw
-    from split,
-    lateral flatten(input => tag_arr) f
+        ,tag_pos
+        ,trim(tagged_account_raw) as tagged_account_raw
+    from split
+    cross join unnest(tag_arr) with ordinality as t(tagged_account_raw, tag_pos)
 ),
 
 clean as (
@@ -51,7 +50,6 @@ clean as (
     brand_name,
     brand_id,
     post_date,
-    -- 정제: 공백 제거 + 앞의 @ 제거
     lower(
       rtrim(
           regexp_replace(tagged_account_raw, '^@', ''),
@@ -69,7 +67,7 @@ final as (
             concat_ws(
                 '||',
                 post_id,
-                tag_pos::string,
+                tag_pos::varchar,
                 tagged_account
             )
         ) as pk_tagged_post,

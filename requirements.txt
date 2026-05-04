@@ -9,6 +9,5 @@ playwright
 python-dotenv
 openpyxl
 
-# snowflake 설치 
-apache-airflow-providers-snowflake
-snowflake-connector-python
+# duckdb
+duckdb
