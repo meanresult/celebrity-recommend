@@ -8,7 +8,12 @@ Playwright로 Instagram 브랜드 태그 페이지를 스크롤하며
   1. 저장된 세션(storage_state.json)으로 로그인 상태 복원
   2. /{brand_id}/tagged/ 페이지로 이동
   3. 스크롤하며 게시물 URL 수집 → 상세 페이지에서 날짜·태그·이미지 파싱
-  4. target_day와 일치하는 게시물만 반환
+  4. 필터 적용 (자기 태그 / 비즈니스 계정 제외)
+  5. target_day와 일치하는 게시물만 반환
+
+수집 필터:
+  - 자기 태그 제외: 브랜드 본인이 올린 게시물은 제외
+  - 비즈니스 계정 제외: 무신사·29cm 등 플랫폼, 편집샵 계정은 제외
 """
 
 import os
@@ -41,6 +46,104 @@ DETAIL_READY_SCRIPT = """
     document.querySelector('meta[property="og:image"]')
 )
 """
+
+
+# ── 비즈니스 계정 필터 설정 ──────────────────────────────────────
+
+# 알려진 국내 패션 플랫폼·편집샵 계정 (프로필 방문 없이 즉시 제외)
+KNOWN_PLATFORM_ACCOUNTS = frozenset({
+    # 종합 패션 플랫폼
+    "musinsa", "musinsa.official",
+    "29cm_official_kr",
+    "wconcept_korea",
+    "ably_official",
+    "zigzag_official",
+    "brandi_hq",
+    "kream.official",
+    # 백화점·대형 리테일
+    "lotteon_fashion", "lottefashion_official",
+    "galleria_dept",
+    "hyundaidept_official",
+    "shinsegaedfs", "ssg_com",
+    # 편집샵·멀티 브랜드
+    "handsome_official",
+    "kasina",
+    "boontheshop",
+    "10cursedmen",
+    "thecornerkorea",
+})
+
+# Instagram 프로필 페이지 본문에서 비즈니스 계정임을 나타내는 키워드
+# (Instagram 카테고리 라벨 및 쇼핑 기능 버튼 텍스트)
+BUSINESS_INDICATOR_KEYWORDS = (
+    # Instagram 카테고리 라벨 (한/영)
+    "의류(브랜드)", "clothing (brand)", "clothing brand",
+    "쇼핑 및 소매", "shopping & retail",
+    "부티크", "boutique store",
+    "소매 회사", "retail company",
+    "패션 디자이너", "fashion designer",
+    "인터넷 회사", "internet company",
+    # Instagram 쇼핑 기능 버튼 (비즈니스 계정에만 표시)
+    "쇼핑하기", "view shop",
+)
+
+
+# ── 필터 함수 ────────────────────────────────────────────────────
+
+def _is_self_tagged(insta_id: str, brand_id: str) -> bool:
+    """브랜드가 자기 자신을 태그한 게시물인지 확인합니다."""
+    return insta_id.lower() == brand_id.lower()
+
+
+def check_is_business_account(
+    profile_page,
+    insta_id: str,
+    cache: dict,
+) -> bool:
+    """
+    계정이 비즈니스/편집샵 계정인지 확인합니다.
+
+    확인 순서:
+      1. cache에 이미 결과가 있으면 재사용 (같은 계정 반복 방문 없음)
+      2. KNOWN_PLATFORM_ACCOUNTS에 포함되면 즉시 True
+      3. 프로필 페이지 방문 → 카테고리 라벨·쇼핑 버튼 키워드 탐지
+
+    Args:
+        profile_page : 프로필 확인 전용 브라우저 탭
+        insta_id     : 확인할 계정 ID
+        cache        : {insta_id: bool} 세션 내 캐시 딕셔너리
+    """
+    if insta_id == "unknown":
+        return False
+
+    if insta_id in cache:
+        return cache[insta_id]
+
+    # 알려진 플랫폼은 프로필 방문 없이 즉시 처리
+    if insta_id in KNOWN_PLATFORM_ACCOUNTS:
+        cache[insta_id] = True
+        return True
+
+    # 프로필 페이지 방문해서 키워드 탐지
+    try:
+        profile_page.goto(
+            f"https://www.instagram.com/{insta_id}/",
+            wait_until="domcontentloaded",
+        )
+        profile_page.wait_for_timeout(1500)
+
+        body_text = profile_page.evaluate("() => document.body.innerText").lower()
+        is_biz    = any(kw.lower() in body_text for kw in BUSINESS_INDICATOR_KEYWORDS)
+
+        cache[insta_id] = is_biz
+        if is_biz:
+            print(f"🏢 비즈니스 계정 감지 → 제외: @{insta_id}")
+        return is_biz
+
+    except Exception as exc:
+        print(f"⚠️ 프로필 확인 실패 ({insta_id}): {exc}")
+        cache[insta_id] = False  # 확인 못 하면 일단 포함
+        return False
 
 
 # ── 로그인 관련 ──────────────────────────────────────────────────
@@ -166,7 +269,7 @@ def parse_post_date_kst(page, kst):
         dt_str = page.locator("time").first.get_attribute("datetime")
 
         if dt_str:
-            post_dt_utc = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+            post_dt_utc   = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
             post_date_str = post_dt_utc.astimezone(kst).strftime("%Y-%m-%d")
             print(f"게시물 날짜: {post_date_str}")
             return post_date_str
@@ -325,6 +428,7 @@ def save_debug_artifact(page, url, reason, debug_dir="/tmp/insta_debug"):
 def collect_posts_with_scroll(
     grid_page,
     detail_page,
+    profile_page,
     brand_id,
     brand_name,
     scroll_y,
@@ -332,9 +436,16 @@ def collect_posts_with_scroll(
     wait_ms,
     kst,
     target_day,
+    filter_self_tag=True,
+    filter_business=True,
 ):
     """
     스크롤하며 게시물을 수집합니다.
+
+    Args:
+        profile_page     : 비즈니스 계정 확인 전용 탭 (filter_business=True일 때 사용)
+        filter_self_tag  : True면 브랜드 본인이 올린 게시물 제외
+        filter_business  : True면 비즈니스/편집샵 계정 게시물 제외
 
     종료 조건:
       - max_scrolls 횟수 초과
@@ -343,11 +454,13 @@ def collect_posts_with_scroll(
     """
     posts            = []
     all_seen         = set()
-    past_date_streak = 0   # 연속 과거 게시물 카운트
-    no_change_count  = 0   # 새 게시물 없는 스크롤 횟수
+    business_cache   = {}    # {insta_id: bool} — 세션 내 비즈니스 계정 캐시
+    past_date_streak = 0
+    no_change_count  = 0
     scroll_count     = 0
     detail_fail_cnt  = 0
     parsed_fail_cnt  = 0
+    filtered_cnt     = 0
     stop_early       = False
     stop_reason      = None
 
@@ -368,6 +481,7 @@ def collect_posts_with_scroll(
                 print(f"처리 중: {url}")
                 open_post_detail_page(detail_page, url)
 
+                # 날짜 확인 (가장 먼저 체크 — 페이지 로드 후 빠르게 필터링)
                 post_date = parse_post_date_kst(detail_page, kst)
                 if post_date is None:
                     parsed_fail_cnt += 1
@@ -394,18 +508,37 @@ def collect_posts_with_scroll(
 
                 past_date_streak = 0
 
-                # target_day와 일치하는 게시물만 수집
-                if target_day is None or post_date == target_day:
-                    post_id, insta_id, insta_name, full_link, src, insta_tag, tags_cnt = (
-                        extract_post_data(detail_page, url)
-                    )
-                    posts.append((
-                        post_id, insta_id, insta_name,
-                        brand_name, brand_id,
-                        full_link, src, post_date,
-                        insta_tag, tags_cnt,
-                    ))
-                    print(f"✅ 수집 완료 ({len(posts)}개): {full_link}")
+                if target_day is not None and post_date != target_day:
+                    continue
+
+                # 날짜 통과 → 상세 데이터 추출
+                post_id, insta_id, insta_name, full_link, src, insta_tag, tags_cnt = (
+                    extract_post_data(detail_page, url)
+                )
+
+                # ── 필터 1: 자기 태그 제외 ───────────────────────────
+                # 브랜드 계정이 자기 자신을 태그한 게시물은 수집 제외
+                if filter_self_tag and _is_self_tagged(insta_id, brand_id):
+                    filtered_cnt += 1
+                    print(f"🔕 자기 태그 제외: @{insta_id}")
+                    continue
+
+                # ── 필터 2: 비즈니스/편집샵 계정 제외 ──────────────
+                # 무신사·29cm 등 플랫폼, 편집샵 계정은 일반 소비자가 아니므로 제외
+                # (처음 만나는 계정만 프로필 방문, 이후 캐시 활용)
+                if filter_business and check_is_business_account(
+                    profile_page, insta_id, business_cache
+                ):
+                    filtered_cnt += 1
+                    continue
+
+                posts.append((
+                    post_id, insta_id, insta_name,
+                    brand_name, brand_id,
+                    full_link, src, post_date,
+                    insta_tag, tags_cnt,
+                ))
+                print(f"✅ 수집 완료 ({len(posts)}개): {full_link}")
 
             except Exception as exc:
                 detail_fail_cnt += 1
@@ -437,7 +570,8 @@ def collect_posts_with_scroll(
 
     print(
         f"\n[수집 완료]"
-        f"\n  게시물  : {len(posts)}개"
+        f"\n  수집    : {len(posts)}개"
+        f"\n  필터 제외: {filtered_cnt}건 (자기태그/비즈니스)"
         f"\n  상세 실패: {detail_fail_cnt}건"
         f"\n  날짜 실패: {parsed_fail_cnt}건"
         f"\n  종료 사유: {stop_reason}"
@@ -459,31 +593,37 @@ def run(
     wait_ms=5000,
     headless=True,
     target_day=None,
+    filter_self_tag=True,
+    filter_business=True,
 ):
     """
     브랜드 태그 페이지에서 게시물을 수집해 리스트로 반환합니다.
 
     Args:
-        state_path  : Playwright 세션 파일 경로
-        brand_id    : Instagram 계정 ID (예: "adidas")
-        brand_name  : 브랜드 키 (예: "adidas") — DB 저장용
-        target_day  : 수집 대상 날짜 'YYYY-MM-DD'. None이면 전체 수집
-        headless    : True면 브라우저 창 없이 실행
+        state_path       : Playwright 세션 파일 경로
+        brand_id         : Instagram 계정 ID (예: "amomento.co")
+        brand_name       : 브랜드 키 (예: "amomento") — DB 저장용
+        target_day       : 수집 대상 날짜 'YYYY-MM-DD'. None이면 전체 수집
+        headless         : True면 브라우저 창 없이 실행
+        filter_self_tag  : True면 브랜드 본인 게시물 제외 (기본값: True)
+        filter_business  : True면 비즈니스/편집샵 계정 제외 (기본값: True)
     """
     kst = timezone(timedelta(hours=9))
 
     with sync_playwright() as playwright:
-        browser     = playwright.chromium.launch(headless=headless)
-        context     = browser.new_context(storage_state=state_path)
-        grid_page   = context.new_page()
+        browser      = playwright.chromium.launch(headless=headless)
+        context      = browser.new_context(storage_state=state_path)
+        grid_page    = context.new_page()
+        detail_page  = context.new_page()
+        profile_page = context.new_page()  # 비즈니스 계정 확인 전용
 
         ensure_logged_in(grid_page, login_url, username, password)
         goto_tagged(grid_page, brand_id)
 
-        detail_page = context.new_page()
         posts = collect_posts_with_scroll(
             grid_page=grid_page,
             detail_page=detail_page,
+            profile_page=profile_page,
             brand_id=brand_id,
             brand_name=brand_name,
             scroll_y=scroll_y,
@@ -491,8 +631,11 @@ def run(
             wait_ms=wait_ms,
             kst=kst,
             target_day=target_day,
+            filter_self_tag=filter_self_tag,
+            filter_business=filter_business,
         )
 
+        profile_page.close()
         detail_page.close()
         grid_page.close()
         browser.close()
