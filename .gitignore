@@ -6,6 +6,8 @@ __pycache__/
 
 # Env
 .env
+.env.share
+.env.prod
 .python-version
 
 # Assistant-local files

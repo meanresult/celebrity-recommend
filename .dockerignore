@@ -2,6 +2,8 @@
 .DS_Store
 .env
 .env.local
+.env.share
+.env.prod
 .venv
 .pytest_cache
 .playwright-cli

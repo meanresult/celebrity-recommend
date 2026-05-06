@@ -45,6 +45,18 @@ flowchart LR
     H --> I["TagScope frontend"]
 ```
 
+로컬 외부 공유 시에는 조회 레이어 앞에 `Cloudflare Tunnel + Caddy`가 추가됩니다.
+
+```mermaid
+flowchart LR
+    USER["External user"] --> CF["Cloudflare Tunnel"]
+    CF --> CADDY["Caddy"]
+    CADDY -->|API requests| API["TagScope backend"]
+    CADDY -->|Web requests| UI["TagScope frontend"]
+```
+
+이 공유 구조는 외부 접속 경로만 추가하는 것이며, 데이터 수집 / 저장 / 변환 흐름은 그대로 유지됩니다.
+
 ### Configuration
 
 - 운영 브랜드, DAG ID, 스케줄의 source of truth는 `configs/brands.yaml`
@@ -166,11 +178,31 @@ flowchart LR
 - 저장소: Snowflake -> DuckDB
 - 조회 레이어: Streamlit -> TagScope
 - DAG 구성: 고정 DAG 파일 -> `brands.yaml` 기반 동적 DAG 생성
+- 외부 공유: 로컬 전용 접속 -> `Cloudflare Tunnel + Caddy` 기반 임시 공유 가능
 
 이 문서에서는 현재 구조만 기준으로 설명합니다.
 
 ---
 
-## 8. 한 줄 정리
+## 8. 향후 AWS S3 추가 구조
+
+현재 코드 기준으로는 S3가 없습니다. 지금은 DuckDB 파일이 저장과 조회의 중심입니다.
+
+향후 운영 안정성을 높이려면 S3를 원본 보관 계층으로 추가할 수 있습니다.
+
+```text
+Instagram 수집
+-> AWS S3 원본 보관
+-> DuckDB 적재 / 갱신
+-> dbt 변환
+-> TagScope API
+-> TagScope Web UI
+```
+
+이렇게 바꾸면 DuckDB 파일을 다시 만들거나, 브랜드별 / 날짜별 원본을 추적하기 쉬워집니다.
+
+---
+
+## 9. 한 줄 정리
 
 이 프로젝트는 Instagram tagged post 데이터를 활용해 브랜드 간 취향 유사도와 겹치는 타겟층을 탐색할 수 있도록 만든 `DuckDB + Airflow + dbt + TagScope` 기반 end-to-end 데이터 파이프라인입니다.

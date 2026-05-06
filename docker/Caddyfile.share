@@ -1,0 +1,11 @@
+:8080 {
+	encode gzip zstd
+
+	@api path /api/*
+	reverse_proxy @api tagscope-backend:8000
+
+	@health path /health
+	reverse_proxy @health tagscope-backend:8000
+
+	reverse_proxy tagscope-frontend:3000
+}
