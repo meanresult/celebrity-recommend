@@ -54,8 +54,8 @@ DETAIL_READY_SCRIPT = """
 KNOWN_PLATFORM_ACCOUNTS = frozenset({
     # 종합 패션 플랫폼
     "musinsa", "musinsa.official",
-    "29cm_official_kr",
-    "wconcept_korea",
+    "29cm_official",
+    "wconceptkorea", "wconcept",
     "ably_official",
     "zigzag_official",
     "brandi_hq",

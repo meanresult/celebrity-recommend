@@ -8,8 +8,20 @@ __pycache__/
 .env
 .python-version
 
+# Assistant-local files
+.claude/
+.gpt/
+.codex/
+CLAUDE.md
+GPT.md
+AGENTS.md
+
 # Logs
 logs/
+
+# Local data
+data/*.duckdb
+data/*.duckdb.*
 
 # Secrets
 secrets/*
@@ -18,6 +30,18 @@ secrets/*
 # dbt
 .dbt/
 target/
+transform/insta_dbt/target/
+transform/insta_dbt/logs/
+transform/logs/
+
+# Frontend
+tagscope/frontend/.next/
+tagscope/frontend/node_modules/
+tagscope/frontend/tsconfig.tsbuildinfo
+
+# Local tool artifacts
+.playwright-cli/
+.pytest_cache/
 
 # OS
 .DS_Store
@@ -28,6 +52,9 @@ Thumbs.db
 *.json
 *copy.py
 tutorial.txt
+secrets/login_failed.png
+secrets/*.ipynb
+secrets/app_memo.py
 
 # Docs (internal-only)
 docs/*(내부용)*

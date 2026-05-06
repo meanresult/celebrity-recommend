@@ -7,6 +7,7 @@ with base as (
         ,brand_name
         ,brand_id
         ,post_date
+        ,full_link
         ,tagged_insta_id
         ,tagged_insta_id_cnt
 
@@ -22,6 +23,7 @@ split as (
         ,brand_name
         ,brand_id
         ,post_date
+        ,full_link
         ,tagged_insta_id_cnt
         ,string_split(tagged_insta_id, ',') as tag_arr
     from base
@@ -35,6 +37,7 @@ flattened as (
         ,brand_name
         ,brand_id
         ,post_date
+        ,full_link
         ,tag_pos
         ,trim(tagged_account_raw) as tagged_account_raw
     from split
@@ -50,6 +53,7 @@ clean as (
     brand_name,
     brand_id,
     post_date,
+    full_link,
     lower(
       rtrim(
           regexp_replace(tagged_account_raw, '^@', ''),
@@ -78,6 +82,7 @@ final as (
         brand_name,
         brand_id,
         post_date,
+        full_link,
         tagged_account
     from clean
 )
